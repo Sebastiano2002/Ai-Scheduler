@@ -1,0 +1,112 @@
+# Preferenze dei lavoratori - SmartScheduler (Fase 1)
+# Formato libero in linguaggio naturale. Ogni blocco inizia con [ID] Nome.
+#
+# Configurazioni:
+#   - Use Case A: 13 lavoratori OMOGENEI (tutti standard, W01-W13).
+#   - Use Case B: 20 lavoratori totali.
+#       * W01-W13: tutti "standard" (stesse persone del Case A, stesso ruolo).
+#       * W14-W20: "specializzati" (presenti solo nel Case B).
+
+# === LAVORATORI STANDARD (W01-W10, presenti in entrambi gli Use Case) ===
+
+[W01] Marco Rossi
+Preferisco lavorare il turno di mattina perche' la sera seguo dei corsi serali.
+Evito volentieri i turni di notte, ma se proprio necessario riesco a farne qualcuno.
+Non sono disponibile il 25 dicembre per le festivita' in famiglia.
+
+[W02] Giulia Bianchi
+Sono una persona mattiniera e do la massima priorita' ai turni del mattino.
+Trovo molto faticosi i turni pomeridiani e li accetto solo di rado.
+Sono completamente indisponibile nei giorni 24, 25 e 26 dicembre.
+
+[W03] Luca Ferrari
+Mi trovo benissimo con i turni di notte, li preferisco perche' di giorno studio all'universita'.
+I turni del mattino mi creano problemi e cerco di evitarli quando possibile.
+Vorrei restare libero il 1 gennaio per Capodanno.
+
+[W04] Sara Russo
+Preferisco i turni di pomeriggio, che si adattano meglio ai miei impegni familiari del mattino.
+I turni di notte mi pesano molto e li tollero solo in casi eccezionali.
+Non posso lavorare il 31 dicembre e il 1 gennaio.
+
+[W05] Andrea Esposito
+Sono molto flessibile e accetto qualsiasi turno senza particolari problemi.
+Se devo scegliere, ho una leggera preferenza per il pomeriggio.
+Non ho giorni di indisponibilita' particolari in questo periodo.
+
+[W06] Chiara Romano
+Preferisco i turni del mattino cosi' posso dedicare i pomeriggi ai miei figli.
+Cerco di evitare la notte, che mi risulta davvero pesante da gestire.
+Sono indisponibile il giorno dell'Immacolata, l'8 dicembre.
+
+[W07] Matteo Colombo
+Mi piacciono i turni di notte e quelli di pomeriggio, sono un tipo nottambulo.
+Il turno del mattino presto e' quello che gradisco di meno.
+Preferisco non lavorare nel weekend del 19 e 20 dicembre se possibile.
+
+[W08] Francesca Ricci
+Ho una netta preferenza per i turni del mattino e per il pomeriggio.
+Per motivi di salute non posso assolutamente svolgere turni di notte.
+Sono indisponibile il 26 dicembre, Santo Stefano.
+
+[W09] Davide Greco
+Sono disponibile e abbastanza elastico, ma preferisco evitare il pomeriggio.
+Tra mattina e notte non ho una preferenza forte, vanno bene entrambi.
+Vorrei avere libero il giorno dell'Epifania, il 6 gennaio.
+
+[W10] Elena Marino
+Preferisco i turni di pomeriggio e, in subordine, quelli di notte.
+I turni del mattino molto presto mi sono scomodi e li accetto malvolentieri.
+Non sono disponibile dal 24 al 26 dicembre per motivi familiari.
+
+[W11] Alessandro Conti
+Preferisco i turni del mattino, dove c'e' piu' attivita' e posso lavorare al meglio.
+Accetto i turni di notte solo saltuariamente, li trovo molto stancanti.
+Non sono disponibile il 25 dicembre.
+
+[W12] Valentina Bruno
+Sono molto flessibile e disponibile a coprire qualsiasi turno, anche all'ultimo momento.
+Ho una leggera preferenza per il turno di notte, che gestisco bene.
+Non ho indisponibilita' particolari in questo periodo.
+
+[W13] Simone Gallo
+Preferisco nettamente il pomeriggio e la mattina, evito la notte quando posso.
+La mia tolleranza ai turni indesiderati e' bassa, mi affatico facilmente.
+Sono indisponibile il 1 gennaio e il 6 gennaio.
+
+# === LAVORATORI SPECIALIZZATI (W14-W20, presenti SOLO nello Use Case B) ===
+
+[W14] Roberto Ferrara
+Come specializzato ho esperienza su tutti i turni ma preferisco il mattino.
+Sono abbastanza flessibile, ma evito volentieri la notte quando possibile.
+Non ho indisponibilita' particolari nel periodo.
+
+[W15] Monica Cattaneo
+Preferisco i turni di pomeriggio, sono quelli in cui rendo di piu'.
+Accetto la notte solo se necessario, non e' il mio ideale.
+Sono indisponibile il 25 e il 26 dicembre per impegni di famiglia.
+
+[W16] Stefano Leone
+Mi adatto facilmente a qualsiasi turno, sono molto flessibile.
+Se devo scegliere preferisco la notte, sono un tipo notturno.
+Non ho giorni di indisponibilita' nel periodo considerato.
+
+[W17] Laura Mancini
+Preferisco i turni del mattino, li gestisco molto bene.
+I turni di notte mi pesano e cerco di evitarli.
+Non sono disponibile il 1 e il 6 gennaio per le feste.
+
+[W18] Gianni Serra
+Sono uno specializzato molto flessibile, accetto tutti i turni senza problemi.
+Ho una leggera preferenza per il pomeriggio.
+Non ho indisponibilita' nel periodo.
+
+[W19] Paola Costa
+Preferisco il turno di mattina e pomeriggio, la notte la evito se posso.
+La mia tolleranza per i turni indesiderati e' media.
+Sono indisponibile il 25 dicembre.
+
+[W20] Fabio Martini
+Mi trovo bene sia di notte che di pomeriggio, sono i turni che preferisco.
+Il mattino presto mi e' scomodo, cerco di evitarlo quando possibile.
+Non ho giorni di indisponibilita' particolari nel periodo.
