@@ -1,0 +1,19 @@
+# Ambienti Virtuali
+venv/
+.venv/
+env/
+.env
+
+# Cache e file compilati Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE e Sistemi Operativi
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# File Generati Dinamicamente (Opzionale: commenta se preferisci committarli)
+formalized_preferences_case_*.py

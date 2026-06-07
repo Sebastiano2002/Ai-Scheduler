@@ -26,6 +26,9 @@ import os
 import pprint
 import datetime
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from pydantic import ValidationError
 
 from llm_engine import AgentExecutor
