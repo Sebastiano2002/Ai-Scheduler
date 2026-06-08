@@ -26,7 +26,6 @@ def ensure_preferences():
 def main():
     parser = argparse.ArgumentParser(description="Orchestratore Completo (Fase 1 -> Fase 2 -> Fase 3)")
     parser.add_argument("--case", choices=["A", "B", "all"], default="all", help="Use case da risolvere")
-    parser.add_argument("--mode", choices=["deterministic", "llm"], default="deterministic", help="Modo per la Fase 2")
     args = parser.parse_args()
 
     # Fase 1: Assicuriamoci di avere i dati
@@ -39,16 +38,28 @@ def main():
         print(f"AVVIO FLUSSO SCHEDULAZIONE - CASO {case_label}")
         print(f"========================================================")
         
-        # FASE 2: Drafting Agent (Genera la bozza)
-        result = run_case(case_label, mode=args.mode)
+        # FASE 2: Drafting Agent (Genera la bozza tramite LLM)
+        result = run_case(case_label)
         
         if result is None or not result.feasible:
             print(f"[!] Impossibile procedere con la Fase 3 per il Caso {case_label}.")
             continue
             
-        # FASE 3: Verification Agent (Verifica matematica, equità e salvataggio)
+        # FASE 3: Verification Agent (Verifica matematica ed equità)
         data = load_problem_data(case_label)
-        verify_schedule(data, result)
+        is_valid, worst_worker = verify_schedule(data, result)
+        
+        if not is_valid:
+            print(f'[!] Schedulazione non valida per il Caso {case_label}. Interruzione.')
+            continue
+            
+        # FASE 4: Refinement Agent (Miglioramento equità)
+        import refinement_agent
+        final_result = refinement_agent.run_refinement(data, result, worst_worker)
+        
+        # Salvataggio finale
+        from verification_agent import export_csv
+        export_csv(data, final_result)
 
 if __name__ == "__main__":
     main()

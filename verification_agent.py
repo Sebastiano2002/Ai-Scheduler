@@ -138,7 +138,7 @@ def export_csv(data: ProblemData, result: ScheduleResult, path: Optional[str] = 
     return path
 
 
-def verify_schedule(data: ProblemData, result: ScheduleResult) -> bool:
+def verify_schedule(data: ProblemData, result: ScheduleResult) -> Tuple[bool, Optional[str]]:
     """
     Funzione principale del Verification Agent:
     1. Verifica vincoli hard.
@@ -159,7 +159,7 @@ def verify_schedule(data: ProblemData, result: ScheduleResult) -> bool:
         if len(violazioni) > 10:
             print(f"    ... e altre {len(violazioni) - 10} violazioni.")
         print("L'orario è stato scartato e non verrà salvato.")
-        return False
+        return False, None
         
     print("[+] VERIFICA SUPERATA: Tutti i vincoli istituzionali sono rispettati.")
     
@@ -174,7 +174,7 @@ def verify_schedule(data: ProblemData, result: ScheduleResult) -> bool:
     print(f"Meno soddisfatto     : {peggiore_id} ({data.worker_names[peggiore_id]}) = {peggiore_score}")
     print("-------------------------------------")
     
-    # Esporta in CSV visto che è tutto valido
-    export_csv(data, result)
+    # Esporta in CSV come risultato intermedio della Fase 3
+    export_csv(data, result, path=f"schedule_case_{data.case_label}_intermedio.csv")
     
-    return True
+    return True, peggiore_id
