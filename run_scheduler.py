@@ -12,6 +12,9 @@ import importlib
 from drafting_agent import run_case, load_problem_data
 from verification_agent import verify_schedule
 
+from dotenv import load_dotenv
+load_dotenv()
+
 def ensure_preferences():
     """Verifica che i file delle preferenze esistano, altrimenti avvia la Fase 1."""
     try:

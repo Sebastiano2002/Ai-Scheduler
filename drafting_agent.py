@@ -160,7 +160,7 @@ Turni (codici): {", ".join(input_data.SHIFT_CODES)}
    (NON significa "vietato lavorare in due giorni consecutivi": i turni di giorno
    consecutivi sono permessi.)
 4. La Notte e' un turno doppio: gia' riflesso in SHIFT_WEIGHT e SHIFT_HOURS.
-5. Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE (nessun turno in d+1 e d+2).
+5. Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE (nessun turno in d+1 e d+2). Fai molta attenzione ai limiti dell'orizzonte: assicurati che se d+1 < NUM_DAYS e d+2 < NUM_DAYS, non ci siano turni. Per evitare TypeError usa una disuguaglianza algebrica: `model.Add(x[w,d,'N'] + x[w,d+1,s] <= 1)` per ogni s, e analogamente per d+2.
 6. Almeno 1 giorno di riposo a settimana (per ogni finestra di 7 giorni: <=6 lavorati).
 - INDISPONIBILITA': nessun turno nei giorni in UNAVAILABLE[w].
 {regola_staffing}
@@ -178,6 +178,9 @@ all'intero (int(round(peso * {SATISFACTION_SCALE}))).
 - Poi DEVI popolare nel namespace queste due variabili:
     RESULT_SCHEDULE : dict {{wid: {{day_index: codice_turno_o_None}}}}
     SOLVER_STATUS   : str con il nome dello status (es. solver.StatusName(status))
+
+ATTENZIONE (MOLTO IMPORTANTE):
+- Usa ESCLUSIVAMENTE list comprehensions `[...]` invece di generator expressions `(...)` dentro `sum()`, `AddAtMostOne()`, `AddExactlyOne()`, `AddBoolOr()`, ecc. (es. scrivi `sum([x[(w,d,s)] for s in ...])` e non `sum(x[(w,d,s)] for s in ...)`). Altrimenti il codice fallirà con un NameError dovuto allo scope di `exec()`.
 
 NON stampare nulla, NON leggere/scrivere file, NON ridefinire le variabili gia'
 disponibili. Restituisci SOLO un blocco di codice Python valido (racchiuso tra
