@@ -4,67 +4,80 @@ llm_engine.py
 Fase 0 - Infrastruttura di esecuzione e orchestrazione (Ponte di Comando).
 
 Questo modulo implementa l'`AgentExecutor`, lo strato che:
-    1. dialoga con l'LLM (Google Gemini) tramite LangChain
-       (`ChatGoogleGenerativeAI` di `langchain_google_genai`);
+    1. dialoga con Google Gemini 2.5 Flash tramite l'SDK `google-genai`
+       (`google.genai.Client`);
     2. estrae il codice Python generato;
     3. lo esegue in modo sicuro (`safe_execute`) catturando eventuali errori;
     4. reinvia gli errori all'LLM per l'auto-correzione, con un numero massimo
        di tentativi (`run_with_retry`).
 
 L'interfaccia pubblica (generate_and_extract, safe_execute, run_with_retry)
-e' invariata rispetto alla versione basata su google.genai: cambia solo il
-backend di comunicazione, ora costruito su LangChain.
+e' identica alla versione precedente: cambia solo il backend di comunicazione,
+ora Google Gemini 2.5 Flash via API remota.
+
+Prerequisito: impostare la variabile d'ambiente GEMINI_API_KEY (oppure passare
+la chiave direttamente al costruttore tramite il parametro `api_key`).
 """
 
+import os
 import re
 import time
 import traceback
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
+from google import genai
+from google.genai import types
 
 
 class AgentExecutor:
-    def __init__(self, api_key, model_name="gemini-2.5-flash"):
+    def __init__(self, api_key=None, model_name="gemini-2.5-flash"):
         """
-        Inizializza il client dell'LLM tramite LangChain.
+        Inizializza il client Google Gemini tramite l'SDK google-genai.
 
-        Usa ChatGoogleGenerativeAI (langchain_google_genai) come backend al
-        posto delle chiamate dirette a google.genai. Il modello di default
-        resta 'gemini-2.5-flash' e la chiave API viene passata esplicitamente
-        (tipicamente letta da GEMINI_API_KEY a monte).
+        Usa google.genai.Client come backend: l'inferenza avviene sul modello
+        Gemini 2.5 Flash via API remota. La chiave API puo' essere passata
+        direttamente oppure letta dalla variabile d'ambiente GEMINI_API_KEY.
         """
         self.model_name = model_name
-        # ChatGoogleGenerativeAI gestisce la comunicazione con l'API Gemini.
-        # google_api_key accetta direttamente la chiave fornita.
-        self.llm = ChatGoogleGenerativeAI(
-            model=model_name,
-            google_api_key=api_key,
-        )
-        print(f"[*] Motore LLM Inizializzato (LangChain) con il modello: {model_name}")
+        # Ultimo codice Python eseguito con successo da run_with_retry. Permette
+        # alle fasi a valle (Fase 4 - raffinamento) di recuperare il sorgente
+        # cp_model effettivamente prodotto dall'LLM, non solo il suo risultato.
+        self.last_code = None
+
+        resolved_key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Chiave API Gemini mancante. Impostare la variabile d'ambiente "
+                "GEMINI_API_KEY oppure passare api_key al costruttore."
+            )
+
+        self.client = genai.Client(api_key=resolved_key)
+        print(f"[*] Motore LLM Inizializzato (Google Gemini) con il modello: {model_name}")
 
     def generate_and_extract(self, prompt, _rate_limit_retries=3):
         """
-        Invia il prompt all'LLM ed estrae solo il codice Python generato.
+        Invia il prompt a Google Gemini ed estrae solo il codice Python generato.
 
-        Se l'API restituisce 429 RESOURCE_EXHAUSTED (quota temporaneamente
-        esaurita), attende il tempo suggerito e riprova automaticamente
-        fino a `_rate_limit_retries` volte, senza consumare i tentativi
-        del ciclo run_with_retry.
+        Il parametro `_rate_limit_retries` gestisce i tentativi in caso di errore
+        di quota (HTTP 429) o errori temporanei dell'API remota.
         """
-        for rate_attempt in range(_rate_limit_retries + 1):
+        for attempt in range(1, _rate_limit_retries + 1):
             try:
-                # LangChain restituisce un AIMessage; il testo e' in `.content`.
-                response = self.llm.invoke([HumanMessage(content=prompt)])
-                testo_risposta = response.content
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        thinking_config=types.ThinkingConfig(
+                            thinking_budget=0,
+                        ),
+                    ),
+                )
+                testo_risposta = response.text
 
-                # `content` puo' essere una stringa oppure una lista di blocchi
-                # (a seconda della risposta): normalizziamo a stringa.
-                if isinstance(testo_risposta, list):
-                    testo_risposta = "".join(
-                        blocco.get("text", "") if isinstance(blocco, dict) else str(blocco)
-                        for blocco in testo_risposta
-                    )
+                # `text` puo' essere None se il modello non ha prodotto testo
+                if not testo_risposta:
+                    print("[-] Attenzione: l'LLM non ha restituito testo.")
+                    return None
 
                 # Estrae il testo contenuto tra ```python e ```
                 match = re.search(r"```python(.*?)```", testo_risposta, re.DOTALL)
@@ -77,33 +90,43 @@ class AgentExecutor:
 
             except Exception as e:
                 err_str = str(e)
-                # Gestione specifica per 429 RESOURCE_EXHAUSTED:
-                # attende il tempo suggerito e riprova senza sprecare tentativi.
-                if "429" in err_str and "RESOURCE_EXHAUSTED" in err_str:
-                    # Estrae il tempo di attesa suggerito dal messaggio di errore.
-                    wait_match = re.search(r"retry.*?(\d+)", err_str, re.IGNORECASE)
-                    wait_secs = int(wait_match.group(1)) + 5 if wait_match else 60
-                    if rate_attempt < _rate_limit_retries:
-                        print(f"[!] Quota API esaurita. Attendo {wait_secs}s prima di riprovare "
-                              f"(tentativo rate-limit {rate_attempt+1}/{_rate_limit_retries})...")
-                        time.sleep(wait_secs)
-                        continue
-                    else:
-                        print(f"[-] Quota API ancora esaurita dopo {_rate_limit_retries} attese.")
+                # Gestione rate limit (HTTP 429): attesa esponenziale.
+                if "429" in err_str or "quota" in err_str.lower():
+                    wait = 30 * attempt
+                    print(f"[-] Rate limit raggiunto (tentativo {attempt}/{_rate_limit_retries}). "
+                          f"Attendo {wait}s prima di riprovare...")
+                    time.sleep(wait)
+                    if attempt == _rate_limit_retries:
+                        print(f"[-] Errore di comunicazione con l'API Gemini: {e}")
                         return None
                 else:
-                    print(f"[-] Errore di comunicazione con l'LLM: {e}")
+                    print(f"[-] Errore di comunicazione con l'API Gemini: {e}")
                     return None
-        return None
 
     def safe_execute(self, code_str, context_vars):
         """
         Esegue il codice Python estratto in modo sicuro.
         Se il codice OR-tools ha errori, non fa crashare il programma ma cattura l'errore.
+
+        NOTA TECNICA: si usa un namespace unico (globals + context_vars fusi) invece
+        di passare globals() e context_vars separatamente a exec(). Con due namespace
+        distinti, Python 3 non rende le variabili locali visibili all'interno di
+        generator expression / list comprehension annidate (che creano il proprio
+        scope e cercano i nomi solo nei globals). Fondendo tutto in un unico dict si
+        elimina il NameError "x is not defined" che si verificava quando il codice
+        generato usava `x` dentro una comprehension dopo averla definita nel corpo.
         """
         try:
-            # Esegue il codice generato dall'LLM, passandogli le variabili di contesto
-            exec(code_str, globals(), context_vars)
+            # Fondiamo globals() e context_vars in un unico namespace.
+            # Le variabili pre-caricate (WORKER_IDS, cp_model, ecc.) sono già in
+            # context_vars; le nuove variabili create dal codice (x, model, solver,
+            # RESULT_SCHEDULE, …) finiscono nello stesso dizionario e sono quindi
+            # visibili anche nelle scope annidate (comprehension, generator, lambda).
+            namespace = {**globals(), **context_vars}
+            exec(code_str, namespace)
+            # Propaga le eventuali nuove variabili definite dal codice in context_vars
+            # (es. RESULT_SCHEDULE, SOLVER_STATUS) così il chiamante le trova lì.
+            context_vars.update(namespace)
             return True, context_vars
 
         except Exception:
@@ -158,6 +181,9 @@ class AgentExecutor:
 
             if successo:
                 print(f"[+] Codice eseguito con successo al tentativo {tentativo}!")
+                # Conserva il sorgente eseguito: la Fase 4 lo rilegge per costruire
+                # il prompt di raffinamento a partire dalla bozza corrente.
+                self.last_code = codice_corrente
                 return True, risultato
 
             # --- STEP 3: Prepara il prompt di correzione con l'errore ---

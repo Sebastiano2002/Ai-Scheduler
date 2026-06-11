@@ -1,0 +1,86 @@
+model = cp_model.CpModel()
+
+# Variabili booleane x[(w, d, s)]
+x = {}
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            x[(w, d, s)] = model.NewBoolVar(f'x_{w}_{d}_{s}')
+
+# Vincoli Hard
+
+# H3a: Max 1 turno al giorno per lavoratore
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        model.AddAtMostOne(x[(w, d, s)] for s in SHIFT_CODES)
+
+# H2: Esattamente 25 turni/mese per lavoratore (conteggiati col peso)
+for w in WORKER_IDS:
+    model.Add(sum(SHIFT_WEIGHT[s] * x[(w, d, s)]
+                  for d in range(NUM_DAYS) for s in SHIFT_CODES) == 25)
+
+# H3b: Divieto Notte(d) -> Mattina(d+1)
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS - 1):
+        model.Add(x[(w, d, 'N')] + x[(w, d + 1, 'M')] <= 1)
+
+# H5: Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        for k in range(1, 3):
+            if d + k < NUM_DAYS:
+                for s in SHIFT_CODES:
+                    model.Add(x[(w, d, 'N')] + x[(w, d + k, s)] <= 1)
+
+# H1: Max 36 ore settimanali per lavoratore (finestra di 7 giorni)
+# H6: Almeno 1 giorno di riposo a settimana (finestra di 7 giorni)
+for w in WORKER_IDS:
+    for t in range(NUM_DAYS - 6):
+        finestra = range(t, t + 7)
+        model.Add(sum(SHIFT_HOURS[s] * x[(w, d, s)]
+                      for d in finestra for s in SHIFT_CODES) <= 36)
+        model.Add(sum(x[(w, d, s)]
+                      for d in finestra for s in SHIFT_CODES) <= 6)
+
+# Indisponibilità
+for w in WORKER_IDS:
+    for d in UNAVAILABLE[w]:
+        for s in SHIFT_CODES:
+            model.Add(x[(w, d, s)] == 0)
+
+# Caso B: Requisiti di copertura
+for d in range(NUM_DAYS):
+    for s in SHIFT_CODES:
+        # Almeno 1 lavoratore specializzato per turno
+        model.Add(sum(x[(w, d, s)] for w in SPECIALIZED_IDS) >= 1)
+        # Almeno 3 lavoratori totali per turno
+        model.Add(sum(x[(w, d, s)] for w in WORKER_IDS) >= 3)
+
+# Funzione Obiettivo: Massimizza la soddisfazione totale
+objective_terms = []
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            scaled_weight = int(round(PREFERENCES[w]['satisfaction_weights'][s] * 10))
+            objective_terms.append(scaled_weight * x[(w, d, s)])
+
+model.Maximize(sum(objective_terms))
+
+# Risoluzione
+solver = cp_model.CpSolver()
+solver.parameters.max_time_in_seconds = MAX_TIME
+solver.parameters.num_search_workers = 8
+solver.parameters.log_search_progress = False
+
+status = solver.Solve(model)
+
+# Popolamento di RESULT_SCHEDULE e SOLVER_STATUS
+RESULT_SCHEDULE = {w: {d: None for d in range(NUM_DAYS)} for w in WORKER_IDS}
+SOLVER_STATUS = solver.StatusName(status)
+
+if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+    for w in WORKER_IDS:
+        for d in range(NUM_DAYS):
+            for s in SHIFT_CODES:
+                if solver.Value(x[(w, d, s)]) == 1:
+                    RESULT_SCHEDULE[w][d] = s

@@ -1,390 +1,480 @@
 """
 refinement_agent.py
 ===================
-Fase 4 - Refinement Agent.
-Raffina iterativamente l'equità concentrandosi sul lavoratore più svantaggiato,
-come identificato dal Verification Agent (Fase 3).
+Fase 4 - Raffinamento della Schedulazione (Ciclo Iterativo).
+
+Chiude l'architettura multi-agente di SmartScheduler implementando il ciclo
+di ottimizzazione dell'equita' descritto nel PROJECT_CONTEXT.md:
+
+  - *Prompt di Feedback*: il Drafting Agent viene reistruito a raffinare la
+    bozza CORRENTE con l'obiettivo specifico di migliorare la soddisfazione del
+    *lavoratore meno soddisfatto* identificato dalla Fase 3.
+  - *Vincolo di ottimizzazione*: il raffinamento NON DEVE far scendere nessun
+    altro lavoratore sotto il livello minimo di soddisfazione attuale; tutti i
+    vincoli hard restano LEGGI inviolabili.
+  - *Terminazione*: il ciclo continua finche' non si raggiunge il limite massimo
+    di iterazioni oppure finche' il solutore non restituisce INFEASIBLE/fallisce
+    (non e' piu' possibile alzare il livello minimo di equita' -> ottimizzazione
+    terminata).
+
+Flusso di un'iterazione:
+    1. costruisce un prompt che INCLUDE il codice cp_model della bozza corrente
+       e chiede di migliorare il lavoratore peggiore senza danneggiare gli altri;
+    2. esegue il nuovo codice con AgentExecutor.run_with_retry (motore Fase 0);
+    3. ricostruisce la ScheduleResult e la passa al Verification Agent (Fase 3);
+    4. se i vincoli hard sono violati -> SCARTA la bozza;
+       se sono rispettati e il nuovo minimo globale e' MIGLIORE -> ACCETTA la
+       bozza come nuovo orario di riferimento.
+
+Esecuzione (richiede la variabile d'ambiente GEMINI_API_KEY):
+    python refinement_agent.py --case A
+    python refinement_agent.py --case B --max-iterations 3
+    # Riparte da una bozza gia' salvata (CSV + .txt del codice) senza ri-fase 2:
+    python refinement_agent.py --case A --from-draft
 """
 
+import argparse
 import os
-import json
-import re
-import time
-import math
-from typing import Dict, Optional
-import copy
-
-from ortools.sat.python import cp_model
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
-from dotenv import load_dotenv
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 import input_data
-from drafting_agent import ProblemData, ScheduleResult, SATISFACTION_SCALE
-
-load_dotenv()
-
-MAX_ITER = 5
-SOLVER_TIMEOUT_SECONDS = 60.0
-LLM_MAX_RETRIES = 3
-LLM_MODEL = "gemini-2.5-flash"
-
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise EnvironmentError("GEMINI_API_KEY non trovata.")
-
-llm = ChatGoogleGenerativeAI(
-    model=LLM_MODEL,
-    google_api_key=GEMINI_API_KEY,
+from drafting_agent import (
+    ProblemData,
+    ScheduleResult,
+    SATISFACTION_SCALE,
+    _build_llm_context,
+    build_schedule_result,
+    export_csv,
+    load_problem_data,
+    run_llm_drafting,
+    save_generated_code,
+)
+from verification_agent import (
+    VerificationReport,
+    load_schedule_from_csv,
+    print_report,
+    verify_schedule,
 )
 
-def build_and_solve_with_floors(
+
+# ===========================================================================
+# 1. PROMPT DI RAFFINAMENTO (Drafting Agent reistruito)
+# ===========================================================================
+def build_refinement_prompt(
     data: ProblemData,
-    min_scores: Dict[str, float],
-    max_time_seconds: float = 30.0,
-    hints: Optional[Dict[str, Dict[int, Optional[str]]]] = None,
-) -> ScheduleResult:
+    current_code: str,
+    worst_worker_id: str,
+    worst_worker_name: str,
+    current_min: float,
+    new_floor_scaled: int,
+) -> str:
     """
-    Ricostruisce il modello CP-SAT da zero (stateless) iniettando le soglie
-    minime di soddisfazione come vincoli addizionali.
-
-    Best Practice #1: Il codice è statico. Solo min_scores cambia ad ogni iterazione.
-    Best Practice #3: Il modello viene ricreato da zero → zero 'vincoli fantasma'.
-    Best Practice #5: max_time_seconds limita il tempo del solver per singola iterazione.
-
-    Parameters
-    ----------
-    data            : ProblemData  – dati del problema (lavoratori, preferenze, staffing)
-    min_scores      : dict         – {worker_id: soglia_minima_soddisfazione}
-    max_time_seconds: float        – timeout OR-Tools per singola esecuzione
-
-    Returns
-    -------
-    ScheduleResult con feasible=True/False e satisfaction_per_worker compilato.
+    Costruisce il prompt che chiede all'LLM di MODIFICARE il codice cp_model
+    della bozza corrente per migliorare il lavoratore piu' svantaggiato, senza
+    far scendere nessun altro sotto il livello minimo attuale e mantenendo
+    intatti tutti i vincoli hard.
     """
-    model = cp_model.CpModel()
-    num_days    = input_data.NUM_DAYS
-    shift_codes = input_data.SHIFT_CODES   # ["M", "P", "N"]
-    shifts      = input_data.SHIFTS
-    hc          = input_data.HARD_CONSTRAINTS
+    floor_scaled = int(round(current_min * SATISFACTION_SCALE))
 
-    shift_hours  = {s: shifts[s]["durata_ore"]  for s in shift_codes}  # M/P=6, N=12
-    shift_weight = {s: shifts[s]["peso_turni"]  for s in shift_codes}  # M/P=1, N=2
+    return f"""Sei il "Drafting Agent" di SmartScheduler nella FASE 4 (raffinamento iterativo
+dell'equita'). Hai gia' prodotto una bozza VALIDA per lo USE CASE {data.case_label}:
+il codice cp_model qui sotto rispetta tutti i vincoli hard. Ora devi MIGLIORARLO.
 
-    # ------------------------------------------------------------------
-    # VARIABILI DECISIONALI: x[(w, d, s)] ∈ {0, 1}
-    # ------------------------------------------------------------------
-    x = {
-        (w, d, s): model.NewBoolVar(f"x_{w}_{d}_{s}")
-        for w in data.worker_ids
-        for d in range(num_days)
-        for s in shift_codes
-    }
+### CODICE cp_model DELLA BOZZA CORRENTE (da modificare, NON da riscrivere da zero)
+```python
+{current_code}
+```
 
-    # ------------------------------------------------------------------
-    # VINCOLI HARD (invariati, copiati 1:1 da drafting_agent.py)
-    # ------------------------------------------------------------------
+### OBIETTIVO DEL RAFFINAMENTO
+Modifica questo codice per migliorare il punteggio di soddisfazione del lavoratore
+{worst_worker_id} ({worst_worker_name}), che e' attualmente il piu' svantaggiato
+con un punteggio di {current_min}.
 
-    # HC#3 (parte 1): max 1 turno al giorno
-    for w in data.worker_ids:
-        for d in range(num_days):
-            model.Add(sum(x[(w, d, s)] for s in shift_codes) <= hc["max_turni_per_giorno"])
+REGOLA FONDAMENTALE (inderogabile):
+- NON devi far scendere il punteggio di NESSUN altro lavoratore al di sotto di
+  {current_min} (il livello minimo di soddisfazione attuale).
+- Devi MANTENERE INTATTI tutti i vincoli hard gia' presenti nel codice (sono
+  LEGGI inviolabili): 36h/settimana, 25 turni mensili pesati, divieto
+  Notte->Mattina, 2 riposi dopo la Notte, >=1 riposo settimanale, staffing,
+  indisponibilita'. NON rimuovere ne' indebolire alcun vincolo esistente.
 
-    # HC#2: esattamente 25 turni al mese (Notte vale 2)
-    for w in data.worker_ids:
-        model.Add(
-            sum(shift_weight[s] * x[(w, d, s)]
-                for d in range(num_days) for s in shift_codes)
-            == hc["turni_mensili_esatti"]
+### COME IMPORLO NEL MODELLO (pattern obbligatorio)
+Nel namespace sono GIA' disponibili, oltre alle variabili della bozza:
+- SATISFACTION_SCALE : int -> {SATISFACTION_SCALE} (fattore di scala dei pesi)
+- WORST_WORKER_ID    : str -> '{worst_worker_id}' (il lavoratore da migliorare)
+- NEW_FLOOR_SCALED   : int -> {new_floor_scaled} (nuovo pavimento di equita', scalato)
+
+La soddisfazione (scalata a interi) di un lavoratore w e':
+```python
+sat_w = sum(int(round(PREFERENCES[w]['satisfaction_weights'][s] * SATISFACTION_SCALE)) * x[(w, d, s)]
+            for d in range(NUM_DAYS) for s in SHIFT_CODES)
+```
+Aggiungi, PRIMA di risolvere, un vincolo di EQUITA' che alza il pavimento per
+TUTTI i lavoratori al nuovo livello richiesto (cosi' il minimo globale sale e
+nessuno scende sotto quello attuale):
+```python
+for w in WORKER_IDS:
+    sat_w = sum(int(round(PREFERENCES[w]['satisfaction_weights'][s] * SATISFACTION_SCALE)) * x[(w, d, s)]
+                for d in range(NUM_DAYS) for s in SHIFT_CODES)
+    model.Add(sat_w >= NEW_FLOOR_SCALED)
+```
+Mantieni la funzione obiettivo che massimizza la soddisfazione totale (puoi
+lasciarla invariata). Se imporre questo pavimento rende il modello INFEASIBLE,
+NON rilassare i vincoli hard: lascia semplicemente che il solver restituisca
+INFEASIBLE (significa che l'equita' non e' ulteriormente migliorabile).
+
+### COSA DEVE PRODURRE IL CODICE (invariato rispetto alla bozza)
+- Risolvi con cp_model.CpSolver() (max_time_in_seconds = MAX_TIME,
+  num_search_workers = 8, log_search_progress = False).
+- Popola nel namespace:
+    RESULT_SCHEDULE : dict {{wid: {{day_index: codice_turno_o_None}}}}
+    SOLVER_STATUS   : str con il nome dello status (solver.StatusName(status))
+
+NON stampare nulla, NON leggere/scrivere file, NON ridefinire le variabili gia'
+disponibili. Restituisci SOLO un blocco di codice Python valido (tra ```python e ```).
+"""
+
+
+# ===========================================================================
+# 2. ESITO DI UN'ITERAZIONE DEL CICLO
+# ===========================================================================
+@dataclass
+class RefinementStep:
+    """Traccia diagnostica di una singola iterazione del ciclo di raffinamento."""
+
+    iteration: int
+    status: str            # 'ACCEPTED' | 'REJECTED_HARD' | 'NO_IMPROVEMENT' | 'INFEASIBLE' | 'LLM_FAILED'
+    solver_status: str
+    worst_before: float
+    worst_after: Optional[float] = None
+    detail: str = ""
+
+
+@dataclass
+class RefinementOutcome:
+    """Risultato complessivo della Fase 4 per uno use case."""
+
+    case_label: str
+    iterations_run: int
+    initial_worst: float
+    final_worst: float
+    improved: bool
+    best_result: ScheduleResult
+    best_report: VerificationReport
+    steps: List[RefinementStep] = field(default_factory=list)
+
+
+# ===========================================================================
+# 3. UTILITY
+# ===========================================================================
+def _is_infeasible(result: ScheduleResult) -> bool:
+    """Vero se il solver ha dichiarato il modello INFEASIBLE o non ha prodotto turni."""
+    status = (result.status_name or "").upper()
+    return (not result.feasible) or ("INFEASIBLE" in status) or ("UNKNOWN" in status and not result.feasible)
+
+
+def _build_refinement_context(
+    data: ProblemData, max_time: float, worst_worker_id: str, new_floor_scaled: int
+) -> dict:
+    """Namespace di esecuzione: contesto della bozza + variabili di equita' della Fase 4."""
+    ctx = _build_llm_context(data, max_time)
+    ctx["SATISFACTION_SCALE"] = SATISFACTION_SCALE
+    ctx["WORST_WORKER_ID"] = worst_worker_id
+    ctx["NEW_FLOOR_SCALED"] = new_floor_scaled
+    return ctx
+
+
+# ===========================================================================
+# 4. CICLO ITERATIVO DI RAFFINAMENTO
+# ===========================================================================
+def run_refinement_loop(
+    executor,
+    data: ProblemData,
+    initial_result: ScheduleResult,
+    initial_report: VerificationReport,
+    max_iterations: int = 3,
+    max_time: float = 60.0,
+    max_retries: int = 3,
+) -> RefinementOutcome:
+    """
+    Esegue il ciclo di raffinamento mirato all'equita' partendo da una bozza
+    gia' verificata come valida (initial_report.hard_ok == True).
+
+    Ad ogni iterazione alza il pavimento di equita' di +1 step (scalato) e chiede
+    all'LLM di modificare il codice corrente di conseguenza; accetta la nuova
+    bozza solo se il Verification Agent la conferma valida E il minimo globale
+    migliora. Termina al raggiungimento di max_iterations o su INFEASIBLE/fallimento.
+    """
+    if not initial_report.hard_ok or initial_report.fairness is None:
+        raise ValueError(
+            "Il raffinamento (Fase 4) richiede una bozza iniziale gia' VALIDA "
+            "(Fase 3 con hard_ok=True)."
+        )
+    if not initial_result.generated_code:
+        raise ValueError(
+            "Manca il codice cp_model della bozza iniziale: la Fase 4 lo richiede "
+            "come input testuale. Rigenera la Fase 2 o passa --from-draft con il "
+            f".txt del codice (draft_code_case_{data.case_label}.txt)."
         )
 
-    # HC#1 + HC#6: max 36 ore settimanali + almeno 1 riposo/settimana
-    week = 7
-    for w in data.worker_ids:
-        for t in range(0, num_days - week + 1):
-            giorni_finestra = range(t, t + week)
-            model.Add(
-                sum(shift_hours[s] * x[(w, d, s)]
-                    for d in giorni_finestra for s in shift_codes)
-                <= hc["max_ore_settimanali"]
-            )
-            model.Add(
-                sum(x[(w, d, s)] for d in giorni_finestra for s in shift_codes)
-                <= week - hc["giorni_riposo_minimi"]
-            )
+    # Stato di riferimento: la migliore schedulazione valida finora.
+    best_result = initial_result
+    best_report = initial_report
+    current_code = initial_result.generated_code
+    current_min = initial_report.fairness.worst_satisfaction
+    initial_worst = current_min
 
-    # HC#5: 2 giorni liberi obbligatori dopo ogni Notte
-    riposi = hc["riposi_obbligatori_dopo_notte"]
-    for w in data.worker_ids:
-        for d in range(num_days):
-            for k in range(1, riposi + 1):
-                if d + k < num_days:
-                    for s in shift_codes:
-                        model.Add(x[(w, d, "N")] + x[(w, d + k, s)] <= 1)
+    steps: List[RefinementStep] = []
 
-    # HC#3 (parte 2): divieto Notte(d) → Mattina(d+1)
-    for w in data.worker_ids:
-        for d in range(num_days - 1):
-            model.Add(x[(w, d, "N")] + x[(w, d + 1, "M")] <= 1)
+    print(f"\n{'#'*64}")
+    print(f"# FASE 4 - REFINEMENT AGENT | Caso {data.case_label}")
+    print(f"# Lavoratore piu' svantaggiato di partenza: "
+          f"{initial_report.fairness.worst_worker_id} "
+          f"({initial_report.fairness.worst_worker_name}) = {current_min}")
+    print(f"# Iterazioni massime: {max_iterations}")
+    print(f"{'#'*64}")
 
-    # Indisponibilità (da preferenze Fase 1)
-    for w in data.worker_ids:
-        for d in data.unavailable.get(w, set()):
-            for s in shift_codes:
-                model.Add(x[(w, d, s)] == 0)
+    for it in range(1, max_iterations + 1):
+        worst_id = best_report.fairness.worst_worker_id
+        worst_name = best_report.fairness.worst_worker_name
+        # Nuovo pavimento: +1 step scalato sopra il minimo attuale -> forza il
+        # minimo globale a salire. Se irraggiungibile, il solver dira' INFEASIBLE.
+        new_floor_scaled = int(round(current_min * SATISFACTION_SCALE)) + 1
 
-    # Staffing (dipende dal caso)
-    if data.case_label == "A":
-        min_per_turno = data.staffing["min_lavoratori_per_turno"]
-        for d in range(num_days):
-            for s in shift_codes:
-                model.Add(sum(x[(w, d, s)] for w in data.worker_ids) >= min_per_turno)
-    else:
-        min_std  = data.staffing["min_standard_per_turno"]
-        min_spec = data.staffing["min_specializzati_per_turno"]
-        for d in range(num_days):
-            for s in shift_codes:
-                model.Add(sum(x[(w, d, s)] for w in data.standard_ids)    >= min_std)
-                model.Add(sum(x[(w, d, s)] for w in data.specialized_ids) >= min_spec)
+        print(f"\n{'-'*64}")
+        print(f"[Iterazione {it}/{max_iterations}] Pavimento attuale = {current_min} "
+              f"-> obiettivo minimo >= {new_floor_scaled / SATISFACTION_SCALE}")
+        print(f"  Target lavoratore: {worst_id} ({worst_name})")
+        print(f"{'-'*64}")
 
-    # ------------------------------------------------------------------
-    # VINCOLI SOFT FLOOR (FASE 4) – PARAMETRIZZAZIONE A DIZIONARIO
-    # Best Practice #1: iniettati come parametri, il codice OR-Tools non cambia mai.
-    # ------------------------------------------------------------------
-    # Costruiamo variabili IntVar per la soddisfazione per poter applicare
-    # i vincoli di soglia in modo deterministico.
-    satisfaction_vars: Dict[str, cp_model.IntVar] = {}
-    for w in data.worker_ids:
-        pesi = data.preferences[w]["satisfaction_weights"]
-        # Calcola i limiti teorici per definire il dominio dell'IntVar
-        min_pos_coef = sum(
-            int(round(pesi[s] * SATISFACTION_SCALE))
-            for d in range(num_days) for s in shift_codes
-            if int(round(pesi[s] * SATISFACTION_SCALE)) > 0
+        prompt = build_refinement_prompt(
+            data, current_code, worst_id, worst_name, current_min, new_floor_scaled
         )
-        max_neg_coef = sum(
-            int(round(pesi[s] * SATISFACTION_SCALE))
-            for d in range(num_days) for s in shift_codes
-            if int(round(pesi[s] * SATISFACTION_SCALE)) < 0
-        )
-        satisfaction_vars[w] = model.NewIntVar(
-            max_neg_coef,
-            min_pos_coef,
-            f"sat_{w}"
-        )
-        model.Add(
-            satisfaction_vars[w] == sum(
-                int(round(pesi[s] * SATISFACTION_SCALE)) * x[(w, d, s)]
-                for d in range(num_days)
-                for s in shift_codes
-            )
+        context_vars = _build_refinement_context(
+            data, max_time, worst_id, new_floor_scaled
         )
 
-        # Applica la soglia minima per questo lavoratore (il cuore della Fase 4)
-        raw_floor = min_scores.get(w, float("-inf"))
-        if math.isfinite(raw_floor):
-            floor_scaled = int(round(raw_floor * SATISFACTION_SCALE))
-            if floor_scaled > max_neg_coef:
-                model.Add(satisfaction_vars[w] >= floor_scaled)
+        # --- STEP 2: esegui il nuovo codice (motore Fase 0, auto-correzione) ---
+        successo, risultato = executor.run_with_retry(
+            prompt, context_vars=context_vars, max_retries=max_retries
+        )
+        if not successo:
+            print("[!] L'LLM non ha prodotto codice eseguibile per questa iterazione. "
+                  "Fine del ciclo.")
+            steps.append(RefinementStep(
+                it, "LLM_FAILED", "N/A", current_min,
+                detail="run_with_retry ha esaurito i tentativi."))
+            break
 
+        raw_schedule = risultato.get("RESULT_SCHEDULE")
+        solver_status = str(risultato.get("SOLVER_STATUS", "UNKNOWN"))
+        if not isinstance(raw_schedule, dict):
+            print(f"[!] Codice valido ma 'RESULT_SCHEDULE' assente (status: "
+                  f"{solver_status}). Tratto come ottimizzazione terminata.")
+            steps.append(RefinementStep(
+                it, "INFEASIBLE", solver_status, current_min,
+                detail="RESULT_SCHEDULE non definito."))
+            break
 
-    # Add Hints if provided
-    if hints:
-        for w in data.worker_ids:
-            for d in range(num_days):
-                for s in shift_codes:
-                    if hints.get(w, {}).get(d) == s:
-                        model.AddHint(x[(w, d, s)], 1)
-                    else:
-                        model.AddHint(x[(w, d, s)], 0)
+        candidate = build_schedule_result(
+            data, raw_schedule, solver_status, source="llm-refined",
+            generated_code=executor.last_code,
+        )
 
-    # ------------------------------------------------------------------
-    # FUNZIONE OBIETTIVO: massimizza soddisfazione totale
+        # --- TERMINAZIONE: INFEASIBLE/fallimento del solutore ---
+        if _is_infeasible(candidate):
+            print(f"[=] Il solutore ha restituito {solver_status}: non e' piu' "
+                  f"possibile alzare il minimo di equita'. Ottimizzazione TERMINATA.")
+            steps.append(RefinementStep(
+                it, "INFEASIBLE", solver_status, current_min,
+                detail="Solver INFEASIBLE forzando un'equita' superiore."))
+            break
 
-    # ------------------------------------------------------------------
-    model.Maximize(sum(satisfaction_vars.values()))
+        # --- STEP 3: Verification Agent (Fase 3) sul nuovo risultato ---
+        candidate_report = verify_schedule(data, candidate)
 
-    # ------------------------------------------------------------------
-    # RISOLUZIONE
-    # ------------------------------------------------------------------
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds   = max_time_seconds  # Best Practice #5
-    solver.parameters.num_search_workers    = 8
-    solver.parameters.log_search_progress   = False
+        if not candidate_report.hard_ok:
+            # Vincoli hard violati -> SCARTA la bozza, mantieni il riferimento.
+            print(f"[X] Bozza SCARTATA: il Verification Agent ha rilevato "
+                  f"{len(candidate_report.violations)} violazioni hard.")
+            steps.append(RefinementStep(
+                it, "REJECTED_HARD", solver_status, current_min,
+                detail=f"{len(candidate_report.violations)} violazioni hard."))
+            continue
 
-    status      = solver.Solve(model)
-    status_name = solver.StatusName(status)
-    feasible    = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+        new_min = candidate_report.fairness.worst_satisfaction
 
-    result = ScheduleResult(
-        case_label   = data.case_label,
-        status_name  = status_name,
-        feasible     = feasible,
-        source       = "phase4_deterministic",
+        # --- ACCETTAZIONE: il minimo globale e' migliorato senza danni agli altri ---
+        if new_min > current_min:
+            print(f"[OK] Bozza ACCETTATA: minimo globale {current_min} -> {new_min} "
+                  f"(lavoratore peggiore: {candidate_report.fairness.worst_worker_id}).")
+            steps.append(RefinementStep(
+                it, "ACCEPTED", solver_status, current_min, worst_after=new_min,
+                detail="Nuovo orario di riferimento."))
+            best_result = candidate
+            best_report = candidate_report
+            current_code = candidate.generated_code or current_code
+            current_min = new_min
+        else:
+            # Valido ma senza guadagno di equita': non aggiorna il riferimento.
+            print(f"[~] Nessun miglioramento dell'equita' (minimo resta {current_min}, "
+                  f"candidato {new_min}). Bozza non adottata.")
+            steps.append(RefinementStep(
+                it, "NO_IMPROVEMENT", solver_status, current_min, worst_after=new_min,
+                detail="Minimo globale non migliorato."))
+            # Non c'e' progresso possibile in questa direzione: si esce.
+            break
+
+    return RefinementOutcome(
+        case_label=data.case_label,
+        iterations_run=len(steps),
+        initial_worst=initial_worst,
+        final_worst=current_min,
+        improved=current_min > initial_worst,
+        best_result=best_result,
+        best_report=best_report,
+        steps=steps,
     )
 
-    if not feasible:
-        return result
 
-    # Estrae la schedulazione e calcola i punteggi reali (non scalati)
-    schedule: Dict[str, Dict[int, Optional[str]]] = {}
-    for w in data.worker_ids:
-        schedule[w] = {}
-        for d in range(num_days):
-            assegnato = None
-            for s in shift_codes:
-                if solver.Value(x[(w, d, s)]) == 1:
-                    assegnato = s
-                    break
-            schedule[w][d] = assegnato
+# ===========================================================================
+# 5. REPORT FINALE DELLA FASE 4
+# ===========================================================================
+def print_refinement_summary(data: ProblemData, outcome: RefinementOutcome) -> None:
+    print(f"\n{'='*64}")
+    print(f"FASE 4 - RAFFINAMENTO COMPLETATO | Caso {outcome.case_label}")
+    print(f"{'='*64}")
+    print(f"Iterazioni eseguite      : {outcome.iterations_run}")
+    print(f"Minimo iniziale (equita'): {outcome.initial_worst}")
+    print(f"Minimo finale  (equita') : {outcome.final_worst}")
+    print(f"Miglioramento ottenuto   : {'SI' if outcome.improved else 'NO'}")
 
-    result.schedule        = schedule
-    result.objective_value = solver.ObjectiveValue() / SATISFACTION_SCALE
+    print("\nStorico iterazioni:")
+    for s in outcome.steps:
+        delta = ""
+        if s.worst_after is not None:
+            delta = f" (minimo {s.worst_before} -> {s.worst_after})"
+        print(f"  [{s.iteration}] {s.status:<15} status_solver={s.solver_status}"
+              f"{delta} | {s.detail}")
 
-    for w in data.worker_ids:
-        pesi = data.preferences[w]["satisfaction_weights"]
-        result.satisfaction_per_worker[w] = round(
-            sum(pesi[s] for d in range(num_days)
-                for s in shift_codes if schedule[w][d] == s), 2
-        )
+    print("\n--- Orario di riferimento finale (verifica Fase 3) ---")
+    print_report(data, outcome.best_report)
 
+
+# ===========================================================================
+# 6. ORCHESTRAZIONE: Fase 2 -> Fase 3 -> Fase 4 per uno use case
+# ===========================================================================
+def _load_draft_from_disk(data: ProblemData) -> ScheduleResult:
+    """
+    Ricostruisce la bozza iniziale da disco: schedulazione dal CSV della Fase 2 e
+    codice cp_model dal .txt salvato. Evita di richiamare l'LLM per la sola bozza
+    iniziale quando e' gia' disponibile su disco.
+    """
+    csv_path = f"schedule_case_{data.case_label}.csv"
+    code_path = f"draft_code_case_{data.case_label}.txt"
+    result = load_schedule_from_csv(data, csv_path)
+    if os.path.exists(code_path):
+        with open(code_path, encoding="utf-8") as f:
+            result.generated_code = f.read()
     return result
 
 
+def run_case(
+    case_label: str,
+    from_draft: bool = False,
+    max_iterations: int = 3,
+    max_time: float = 60.0,
+) -> Optional[RefinementOutcome]:
+    """
+    Esegue l'intera pipeline a valle per uno use case:
+      Fase 2 (bozza, o caricata da disco) -> Fase 3 (verifica) -> Fase 4 (raffina).
+    """
+    data = load_problem_data(case_label)
 
+    # Inferenza via Google Gemini 2.5 Flash: richiede GEMINI_API_KEY.
+    from llm_engine import AgentExecutor
+    executor = AgentExecutor()
 
+    # --- Bozza iniziale (Fase 2) ---
+    if from_draft:
+        print(f"[*] Carico la bozza iniziale da disco (Caso {case_label})...")
+        initial_result = _load_draft_from_disk(data)
+        if not initial_result.generated_code:
+            raise SystemExit(
+                f"[!] Manca 'draft_code_case_{case_label}.txt' (codice cp_model "
+                f"della bozza). Rigenera la Fase 2 senza --from-draft."
+            )
+    else:
+        print(f"[*] Genero la bozza iniziale con la Fase 2 (Caso {case_label})...")
+        initial_result = run_llm_drafting(executor, data, max_time=max_time)
+        if initial_result is None:
+            raise SystemExit(
+                f"[!] La Fase 2 non ha prodotto una bozza per il Caso {case_label}."
+            )
 
-def ask_llm_for_new_threshold(
-    data: ProblemData,
-    current_scores: Dict[str, float],
-    current_min_scores: Dict[str, float],
-    iteration: int,
-    target_worker: str,
-    max_retries: int = LLM_MAX_RETRIES,
-) -> Optional[dict]:
-    """Chiama l'LLM per determinare la nuova soglia per il lavoratore peggiore."""
-    worst_score = current_scores[target_worker]
-    
-    workers_sorted = sorted(current_scores.items(), key=lambda kv: kv[1])
-    ranking_str = "\n".join(
-        f"  {wid} ({data.worker_names[wid]}): soddisfazione={score:.1f}, "
-        f"soglia_minima_attuale={current_min_scores.get(wid, 'nessuna')}"
-        for wid, score in workers_sorted
+    # --- Verifica iniziale (Fase 3) ---
+    print(f"\n[*] Verifica della bozza iniziale (Fase 3)...")
+    initial_report = verify_schedule(data, initial_result)
+    print_report(data, initial_report)
+
+    if not initial_report.hard_ok:
+        print("\n[!] La bozza iniziale viola gia' i vincoli hard: il raffinamento "
+              "(Fase 4) parte solo da un piano valido. Interrompo.")
+        return None
+
+    # --- Ciclo di raffinamento (Fase 4) ---
+    outcome = run_refinement_loop(
+        executor, data, initial_result, initial_report,
+        max_iterations=max_iterations, max_time=max_time,
     )
-    
-    prompt = f"""Sei il "Fairness Optimizer" di SmartScheduler (Fase 4, iterazione {iteration}).
 
-Il tuo compito è analizzare i punteggi di soddisfazione e alzare la soglia minima
-del lavoratore meno soddisfatto identificato dalla Fase 3.
+    # --- Salvataggio dell'orario di riferimento finale ---
+    final_csv = f"schedule_case_{case_label}_final.csv"
+    export_csv(data, outcome.best_result, path=final_csv)
+    if outcome.best_result.generated_code:
+        save_generated_code(
+            case_label, outcome.best_result.generated_code,
+            path=f"final_code_case_{case_label}.txt",
+        )
 
-### PUNTEGGI ATTUALI
-{ranking_str}
+    print_refinement_summary(data, outcome)
+    return outcome
 
-### REGOLE DA RISPETTARE
-1. Il lavoratore identificato come peggiore è {target_worker} ({data.worker_names[target_worker]}) con score {worst_score:.1f}.
-2. Proponi di alzare la sua soglia minima a un valore MAGGIORE del suo PUNTEGGIO ATTUALE.
-3. Lo step deve essere conservativo (piccolo incremento).
-4. La nuova soglia DEVE superare strettamente il punteggio attuale {worst_score:.1f}.
 
-### OUTPUT RICHIESTO
-Rispondi SOLO con un oggetto JSON valido.
-Schema:
-{{
-  "target_worker": "{target_worker}",
-  "new_min_score": <float>,
-  "reasoning": "<breve spiegazione in italiano, max 2 righe>"
-}}
-"""
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = llm.invoke([HumanMessage(content=prompt)])
-            raw_text = response.content
-            if isinstance(raw_text, list):
-                raw_text = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in raw_text)
+def main():
+    parser = argparse.ArgumentParser(
+        description="SmartScheduler Fase 4 - Refinement Agent "
+                    "(ciclo iterativo di equita')."
+    )
+    parser.add_argument(
+        "--case", choices=["A", "B", "all"], default="all",
+        help="Use case da raffinare (default: all).",
+    )
+    parser.add_argument(
+        "--from-draft", action="store_true",
+        help="Usa la bozza iniziale gia' salvata su disco (CSV + codice .txt) "
+             "invece di rigenerarla con la Fase 2.",
+    )
+    parser.add_argument(
+        "--max-iterations", type=int, default=3,
+        help="Numero massimo di iterazioni del ciclo di raffinamento (default: 3).",
+    )
+    parser.add_argument(
+        "--max-time", type=float, default=60.0,
+        help="Tempo massimo del solver per iterazione in secondi (default: 60).",
+    )
+    args = parser.parse_args()
 
-            match = re.search(r"```json\s*(.*?)\s*```", raw_text, re.DOTALL)
-            if not match:
-                match = re.search(r"(\{.*?\})", raw_text, re.DOTALL)
-            if not match:
-                continue
+    casi = ["A", "B"] if args.case == "all" else [args.case]
+    for case_label in casi:
+        run_case(
+            case_label,
+            from_draft=args.from_draft,
+            max_iterations=args.max_iterations,
+            max_time=args.max_time,
+        )
 
-            payload = json.loads(match.group(1))
-            if "target_worker" not in payload or "new_min_score" not in payload:
-                continue
 
-            return payload
-
-        except Exception as e:
-            err = str(e)
-            if "429" in err or "RESOURCE_EXHAUSTED" in err:
-                time.sleep(60)
-            else:
-                time.sleep(2)
-
-    return None
-
-def run_refinement(data: ProblemData, base_result: ScheduleResult, initial_worst_worker: str) -> ScheduleResult:
-    """
-    Esegue il ciclo di raffinamento dell'equità (Fase 4).
-    """
-    print("=" * 60)
-    print(f"🔄 FASE 4 – REFINEMENT AGENT | Caso {data.case_label}")
-    print("=" * 60)
-    
-    # Inizialmente a -∞ per tutti → nessun vincolo aggiuntivo rispetto alla Fase 2
-    min_scores: Dict[str, float] = {wid: float("-inf") for wid in data.worker_ids}
-    
-    best_result = base_result
-    best_scores = dict(base_result.satisfaction_per_worker)
-    
-    # Usiamo il peggiore identificato dalla verifica
-    current_worst_worker = initial_worst_worker
-
-    for iteration in range(1, MAX_ITER + 1):
-        print(f"\n🔄 Iterazione {iteration}/{MAX_ITER} - Focus: {current_worst_worker}")
-        
-        llm_decision = ask_llm_for_new_threshold(data, best_scores, min_scores, iteration, current_worst_worker)
-        
-        if not llm_decision:
-            print("   ❌ LLM non ha prodotto JSON valido. Interruzione refinement.")
-            break
-            
-        target_wid = llm_decision["target_worker"]
-        new_min_score = float(llm_decision["new_min_score"])
-        
-        # Validazione corretta: se la nuova soglia NON migliora, interrompiamo il raffinamento.
-        if new_min_score <= best_scores[target_wid]:
-            print(f"   ⚠️  La nuova soglia ({new_min_score}) non migliora quella attuale ({best_scores[target_wid]}). Convergenza raggiunta.")
-            break
-            
-        print(f"   🤖 LLM alza soglia di {target_wid} a {new_min_score}")
-        print(f"   📝 {llm_decision.get('reasoning', '')}")
-        
-        new_min_scores = dict(min_scores)
-        new_min_scores[target_wid] = new_min_score
-
-        # Regola Robin Hood: nessuno può scendere sotto la soglia di chi sta peggio tra "gli altri"
-        altri_scores = [best_scores[w] for w in data.worker_ids if w != target_wid]
-        min_other_score = min(altri_scores) if altri_scores else float("-inf")
-
-        for wid in data.worker_ids:
-            if wid != target_wid:
-                new_min_scores[wid] = max(min_scores.get(wid, float("-inf")), min_other_score)
-
-        print(f"   ⚙️  Esecuzione solver...")
-        result = build_and_solve_with_floors(data, new_min_scores, SOLVER_TIMEOUT_SECONDS, best_result.schedule)
-
-        if not result.feasible:
-            print(f"\n🏁 STOP: Ottimo di Pareto raggiunto (INFEASIBLE con soglia {new_min_score} per {target_wid}).")
-            break
-            
-        # Aggiornamento stato
-        min_scores = new_min_scores
-        best_result = result
-        best_scores = dict(result.satisfaction_per_worker)
-        
-        # Aggiorna il lavoratore peggiore per la prossima iterazione
-        current_worst_worker = min(best_scores, key=best_scores.get)
-
-    print(f"\n✅ FASE 4 COMPLETATA – Soddisfazione min: {min(best_scores.values()):.1f}")
-    return best_result
+if __name__ == "__main__":
+    main()

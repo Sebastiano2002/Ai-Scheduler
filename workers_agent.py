@@ -18,16 +18,12 @@ ogni lavoratore un modello di soddisfazione (satisfaction_weights) utilizzabile
 direttamente nella funzione obiettivo del modello OR-Tools della Fase 2.
 
 Esecuzione:
-    Impostare la chiave API di Gemini nella variabile d'ambiente GEMINI_API_KEY
-    e lanciare:  python workers_agent.py
+    Impostare la variabile d'ambiente GEMINI_API_KEY e lanciare:
+        python workers_agent.py
 """
 
-import os
 import pprint
 import datetime
-
-from dotenv import load_dotenv
-load_dotenv()
 
 from pydantic import ValidationError
 
@@ -227,17 +223,9 @@ def formalize_case(executor, case_label, preferences_text):
 # MAIN: esegue la formalizzazione per ENTRAMBI gli use case
 # ---------------------------------------------------------------------------
 def main():
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise SystemExit(
-            "[!] Variabile d'ambiente GEMINI_API_KEY non impostata.\n"
-            "    Impostala con la tua chiave API di Gemini prima di eseguire.\n"
-            "    PowerShell:  $env:GEMINI_API_KEY = 'la-tua-chiave'\n"
-            "    Bash:        export GEMINI_API_KEY='la-tua-chiave'"
-        )
-
+    # L'inferenza avviene via Google Gemini 2.5 Flash: richiede GEMINI_API_KEY.
     preferences_text = load_preferences_text()
-    executor = AgentExecutor(api_key=api_key)
+    executor = AgentExecutor()
 
     risultati = {}
     for case_label in ("A", "B"):
