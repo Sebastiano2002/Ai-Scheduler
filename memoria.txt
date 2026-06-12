@@ -1,0 +1,30 @@
+Resoconto SmartScheduler — handoff
+
+Progetto: sistema multi-agente per la schedulazione di turni ospedalieri, combina LLM (Google Gemini 2.5 Flash, google-genai) e Programmazione a Vincoli (OR-Tools CP-SAT). Requisiti nel file Progetto IA.pdf (riassunti in PROJECT_CONTEXT.md). Si lavora una fase per volta.
+
+Cosa è stato fatto in questa sessione (Fase 1 + propagazione):
+
+1. Distinzione esplicita Hard/Soft nell'output della Fase 1. Due strutture parallele nei file formalized_preferences_c
+CONSTRAINTS = { "institutional": {...regole globali da input_data...}, "per_worker": { wid: {nome, turni_vietati} } }
+  - SOFT_CONSTRAINTS = { wid: {nome, turni_preferiti, turni_indesiderati, giorni_indesiderati, flexibility_score, satisfaction_weights} }
+  - La vecchia vista flat WORnata; tutte le fasi leggonodalle due strutture.
+2. Indisponibilità → soft cononibilita (prima hard, rischio INFEASIBLE) è diventato giorni_indesiderati (soft). Nell'obiettivo: penalità
+UNDESIRED_DAY_PENALTY = 50.0 ni turno in un giorno di ferie → il solver li evita con forza ma in emergenza può assegnarli. I divieti medici sul
+tipo di turno (turni_vietati,D.
+3. Modello di soddisfazione unico: worker_satisfaction() in drafting_agent.py = Σ pesi_turno − PENALTY×(turni in giorni di ferie). Usato in Fase 2, loader CSV (Fase 3) e
+vincolo di equità (Fase 4) pe
+ca (Fase 3): rimosso _check_availability (le ferie non sono più una violazione hard); aggiunto _check_forbidden_shifts per i turni_vietati.
+
+Stato file: models.py, workers_agent.py, drafting_agent.py, verification_agent.py,
+refinement_agent.py aggiornaterences_case_A/B.py rigenerati (migrazione deterministica, senza LLM). Tutti gli unit test passano; non ancora
+eseguito un run completo con
+
+Punti aperti / da decidere:
+- Rigenerare la Fase 1 con l'LLM (serve GEMINI_API_KEY) per catturare anche le richieste
+"morbide" non ancora formalizil 1 gennaio", W07 weekend,nia). I file migrati contengono solo le date già presenti prima.
+- analysis_results.md (report) cita ancora WORKER_PREFERENCES: da aggiornare.
+- Tarare eventualmente UNDESIRED_DAY_PENALTY dopo un run reale.
+- Prossima fase su cui lavorare: da scegliere (probabile Fase 2/3/4 end-to-end con LLM).
+
+---
+Nella prossima sessione ho giquindi puoi anche solo dirmi"riprendiamo SmartScheduler" e da dove vuoi partire.

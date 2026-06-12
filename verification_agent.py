@@ -48,6 +48,7 @@ from drafting_agent import (
     ScheduleResult,
     load_problem_data,
     run_llm_drafting,
+    worker_satisfaction,
 )
 
 
@@ -212,6 +213,18 @@ class HardConstraintVerifier:
                         f"catena VIETATA Notte(giorno {d}) -> Mattina(giorno {d+1})",
                         w, d + 1))
 
+    # -- turni vietati (vincolo HARD per-lavoratore della Fase 1) ------------
+    def _check_forbidden_shifts(self, sched, viol):
+        for w in self.data.worker_ids:
+            vietati = self.data.forbidden.get(w, set())
+            for d in range(self.num_days):
+                code = sched[w].get(d)
+                if code is not None and code in vietati:
+                    viol.append(Violation(
+                        "FORBIDDEN",
+                        f"turno '{code}' assolutamente vietato per il lavoratore",
+                        w, d))
+
     # -- copertura / staffing (dipende dallo use case) ----------------------
     def _check_staffing(self, sched, viol):
         for d in range(self.num_days):
@@ -265,6 +278,7 @@ class HardConstraintVerifier:
         self._check_weekly_windows(sched, viol)
         self._check_rest_after_night(sched, viol)
         self._check_night_to_morning(sched, viol)
+        self._check_forbidden_shifts(sched, viol)
         self._check_staffing(sched, viol)
         return viol
 
@@ -395,14 +409,10 @@ def load_schedule_from_csv(data: ProblemData, path: str) -> ScheduleResult:
         schedule=schedule,
         source="csv",
     )
-    # Ricalcola la soddisfazione per lavoratore dai pesi della Fase 1.
+    # Ricalcola la soddisfazione per lavoratore col modello unico della Fase 2
+    # (pesi dei turni + penalita' per i giorni indesiderati).
     for w in data.worker_ids:
-        pesi = data.preferences[w]["satisfaction_weights"]
-        result.satisfaction_per_worker[w] = round(
-            sum(pesi[s] for d in range(input_data.NUM_DAYS)
-                for s in input_data.SHIFT_CODES if schedule[w][d] == s),
-            2,
-        )
+        result.satisfaction_per_worker[w] = worker_satisfaction(data, schedule, w)
     result.objective_value = round(sum(result.satisfaction_per_worker.values()), 2)
     return result
 

@@ -4,8 +4,8 @@ llm_engine.py
 Fase 0 - Infrastruttura di esecuzione e orchestrazione (Ponte di Comando).
 
 Questo modulo implementa l'`AgentExecutor`, lo strato che:
-    1. dialoga con OpenRouter tramite l'SDK `openai`
-       (`openai.OpenAI`);
+    1. dialoga con Google Gemini 2.5 Flash tramite l'SDK `google-genai`
+       (`google.genai.Client`);
     2. estrae il codice Python generato;
     3. lo esegue in modo sicuro (`safe_execute`) catturando eventuali errori;
     4. reinvia gli errori all'LLM per l'auto-correzione, con un numero massimo
@@ -13,9 +13,9 @@ Questo modulo implementa l'`AgentExecutor`, lo strato che:
 
 L'interfaccia pubblica (generate_and_extract, safe_execute, run_with_retry)
 e' identica alla versione precedente: cambia solo il backend di comunicazione,
-ora tramite API remota OpenRouter.
+ora Google Gemini 2.5 Flash via API remota.
 
-Prerequisito: impostare la variabile d'ambiente OPENROUTER_API_KEY (oppure passare
+Prerequisito: impostare la variabile d'ambiente GEMINI_API_KEY (oppure passare
 la chiave direttamente al costruttore tramite il parametro `api_key`).
 """
 
@@ -23,20 +23,19 @@ import os
 import re
 import time
 import traceback
-import hashlib
 
 from google import genai
 from google.genai import types
 
 
 class AgentExecutor:
-    def __init__(self, api_key=None, model_name="gemini-2.5-pro"):
+    def __init__(self, api_key=None, model_name="gemini-2.5-flash"):
         """
-        Inizializza il client Google Gemini tramite l'SDK ufficiale google-genai.
-        
-        L'inferenza avviene sul modello specificato via API remota. 
-        La chiave API puo' essere passata direttamente oppure letta dalla 
-        variabile d'ambiente GEMINI_API_KEY.
+        Inizializza il client Google Gemini tramite l'SDK google-genai.
+
+        Usa google.genai.Client come backend: l'inferenza avviene sul modello
+        Gemini 2.5 Flash via API remota. La chiave API puo' essere passata
+        direttamente oppure letta dalla variabile d'ambiente GEMINI_API_KEY.
         """
         self.model_name = model_name
         # Ultimo codice Python eseguito con successo da run_with_retry. Permette
@@ -54,10 +53,6 @@ class AgentExecutor:
         self.client = genai.Client(api_key=resolved_key)
         print(f"[*] Motore LLM Inizializzato (Google Gemini) con il modello: {model_name}")
 
-        # Inizializzazione della cartella di cache locale
-        self.cache_dir = ".llm_cache"
-        os.makedirs(self.cache_dir, exist_ok=True)
-
     def generate_and_extract(self, prompt, _rate_limit_retries=3):
         """
         Invia il prompt a Google Gemini ed estrae solo il codice Python generato.
@@ -65,16 +60,6 @@ class AgentExecutor:
         Il parametro `_rate_limit_retries` gestisce i tentativi in caso di errore
         di quota (HTTP 429) o errori temporanei dell'API remota.
         """
-        # Creiamo un hash MD5 del prompt per la cache
-        prompt_hash = hashlib.md5(prompt.encode('utf-8')).hexdigest()
-        cache_file = os.path.join(self.cache_dir, f"{prompt_hash}.txt")
-
-        # Se il prompt e' gia' nella cache, restituiamo il risultato senza chiamare le API
-        if os.path.exists(cache_file):
-            print("[*] Risposta LLM recuperata dalla cache locale.")
-            with open(cache_file, "r", encoding="utf-8") as f:
-                return f.read()
-
         for attempt in range(1, _rate_limit_retries + 1):
             try:
                 response = self.client.models.generate_content(
@@ -89,7 +74,7 @@ class AgentExecutor:
                 )
                 testo_risposta = response.text
 
-                # `testo_risposta` puo' essere None se il modello non ha prodotto testo
+                # `text` puo' essere None se il modello non ha prodotto testo
                 if not testo_risposta:
                     print("[-] Attenzione: l'LLM non ha restituito testo.")
                     return None
@@ -98,11 +83,7 @@ class AgentExecutor:
                 match = re.search(r"```python(.*?)```", testo_risposta, re.DOTALL)
 
                 if match:
-                    risultato = match.group(1).strip()
-                    # Salviamo il risultato nella cache
-                    with open(cache_file, "w", encoding="utf-8") as f:
-                        f.write(risultato)
-                    return risultato
+                    return match.group(1).strip()
                 else:
                     print("[-] Attenzione: l'LLM non ha generato un blocco di codice valido.")
                     return None
@@ -111,7 +92,7 @@ class AgentExecutor:
                 err_str = str(e)
                 # Gestione rate limit (HTTP 429): attesa esponenziale.
                 if "429" in err_str or "quota" in err_str.lower():
-                    wait = (2 ** attempt) * 10
+                    wait = 30 * attempt
                     print(f"[-] Rate limit raggiunto (tentativo {attempt}/{_rate_limit_retries}). "
                           f"Attendo {wait}s prima di riprovare...")
                     time.sleep(wait)
@@ -148,8 +129,8 @@ class AgentExecutor:
             context_vars.update(namespace)
             return True, context_vars
 
-        except BaseException as e:
-            # Se l'LLM ha scritto codice non valido (es. KeyError, SyntaxError) o usa exit()
+        except Exception:
+            # Se l'LLM ha scritto codice non valido (es. KeyError, SyntaxError)
             errore_dettagliato = traceback.format_exc()
             return False, errore_dettagliato
 

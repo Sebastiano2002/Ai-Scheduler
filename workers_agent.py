@@ -13,9 +13,12 @@ Questo script implementa l'agente che:
     4. salva il risultato in 'formalized_preferences_case_A.py' /
        'formalized_preferences_case_B.py'.
 
-Il dizionario formalizzato distingue vincoli soft (preferenze) e associa a
-ogni lavoratore un modello di soddisfazione (satisfaction_weights) utilizzabile
-direttamente nella funzione obiettivo del modello OR-Tools della Fase 2.
+L'output formalizzato distingue ESPLICITAMENTE due strutture parallele:
+    - HARD_CONSTRAINTS : vincoli inderogabili (istituzionali globali +
+      per-lavoratore: giorni di indisponibilita' e turni assolutamente vietati);
+    - SOFT_CONSTRAINTS : preferenze per lavoratore con il modello di
+      soddisfazione (satisfaction_weights) usabile nella funzione obiettivo
+      del modello OR-Tools della Fase 2.
 
 Esecuzione:
     Impostare la variabile d'ambiente GEMINI_API_KEY e lanciare:
@@ -70,8 +73,9 @@ def build_prompt(case_label, workers, preferences_text):
     prompt = f"""Sei il "Workers Agent" di un sistema di schedulazione di turni ospedalieri.
 Il tuo compito e' trasformare le preferenze dei lavoratori, espresse in
 linguaggio naturale italiano, in una struttura dati Python rigorosa e
-leggibile dalla macchina, che separi i vincoli soft (preferenze) e fornisca
-un modello di soddisfazione numerico per la funzione obiettivo di OR-Tools.
+leggibile dalla macchina che DISTINGUA CHIARAMENTE i Vincoli Hard
+(inderogabili) dai Vincoli Soft (preferenze), e che fornisca un modello di
+soddisfazione numerico per la funzione obiettivo di OR-Tools.
 
 ### CONTESTO: USE CASE {case_label}
 Turni disponibili (codici da usare obbligatoriamente):
@@ -94,6 +98,27 @@ ciascun lavoratore):
 {preferences_text}
 ---
 
+### DISTINZIONE HARD vs SOFT (FONDAMENTALE)
+Per ogni lavoratore devi classificare ciascuna informazione del testo come
+vincolo HARD (inderogabile) oppure SOFT (preferenza):
+
+- HARD -> va in `hard_constraints`. SOLO impossibilita' assolute sul TIPO di turno:
+    * "non posso ASSOLUTAMENTE fare il turno Y", "per motivi di salute non
+      posso fare Y" -> aggiungi il codice turno in `turni_vietati`.
+- SOFT -> va in `soft_constraints`. Tutto il resto, incluse le richieste di ferie:
+    * "preferisco / do priorita' / mi trovo bene con" -> `turni_preferiti`.
+    * "evito volentieri / tollero raramente / gradisco meno / mi pesa" (senza
+      un divieto assoluto) -> `turni_indesiderati`.
+    * QUALSIASI richiesta su GIORNI specifici ("non sono disponibile il X",
+      "non posso lavorare il X", "vorrei restare libero il X", "preferirei non
+      lavorare nel weekend del X") -> aggiungi le date in `giorni_indesiderati`.
+
+IMPORTANTE: i giorni NON sono mai un vincolo hard. Anche un "non sono
+disponibile il 25 dicembre" va in `giorni_indesiderati` (soft): l'algoritmo gli
+applichera' una penalita' altissima, cosi' il lavoratore resta a casa salvo
+emergenze di organico. Solo un divieto assoluto sul TIPO di turno (es. notte
+per salute) e' HARD (`turni_vietati`).
+
 ### COMPITO
 Genera codice Python che definisca un UNICO dizionario chiamato
 esattamente `WORKER_PREFERENCES`.
@@ -102,33 +127,56 @@ esattamente `WORKER_PREFERENCES`.
   {ids_lavoratori}
 - Il valore associato a ogni ID e' un dizionario con QUESTE chiavi esatte:
 
-    "nome"                 : str  -> nome completo del lavoratore
-    "turni_preferiti"      : list -> codici turno graditi, ordinati dal piu'
-                                     gradito (es. ['M', 'P'])
-    "turni_indesiderati"   : list -> codici turno sgraditi (es. ['N'])
-    "giorni_indisponibilita": list -> date ISO 'YYYY-MM-DD' in cui il
-                                      lavoratore NON puo' lavorare
-    "flexibility_score"    : float -> tolleranza ai turni indesiderati,
-                                      tra 0.0 (rigido) e 1.0 (molto flessibile)
-    "satisfaction_weights" : dict -> peso numerico per OGNI codice turno
-                                     ({codici_turno}). Usa valori positivi per
-                                     i turni preferiti, vicini a 0 per quelli
-                                     neutri e negativi per quelli indesiderati.
-                                     Questi pesi servono per MASSIMIZZARE la
-                                     soddisfazione nella funzione obiettivo
-                                     OR-Tools.
+    "nome"             : str  -> nome completo del lavoratore
+    "hard_constraints" : dict -> vincoli inderogabili del lavoratore, con chiavi:
+        "turni_vietati"         : list -> codici turno ASSOLUTAMENTE vietati
+                                          (es. ['N']); lista vuota se nessuno
+    "soft_constraints" : dict -> preferenze del lavoratore, con chiavi:
+        "turni_preferiti"     : list -> codici turno graditi, dal piu' gradito
+                                        (es. ['M', 'P'])
+        "turni_indesiderati"  : list -> codici turno sgraditi ma NON vietati
+        "giorni_indesiderati" : list -> date ISO 'YYYY-MM-DD' che il lavoratore
+                                        preferirebbe NON lavorare (ferie); lista
+                                        vuota se nessuna
+        "flexibility_score"   : float -> tolleranza ai turni indesiderati, tra
+                                         0.0 (rigido) e 1.0 (molto flessibile)
+        "satisfaction_weights": dict -> peso numerico per OGNI codice turno
+                                        ({codici_turno}). Positivo per i turni
+                                        preferiti, vicino a 0 per i neutri,
+                                        negativo per gli indesiderati. Serve a
+                                        MASSIMIZZARE la soddisfazione nella
+                                        funzione obiettivo OR-Tools.
 
 ### REGOLE
 1. Includi TUTTI e SOLI i lavoratori elencati sopra.
 2. Usa solo i codici turno ammessi: {codici_turno}.
 3. I `satisfaction_weights` devono contenere una voce per ciascuno dei
    codici turno ammessi (anche quelli neutri, con peso 0).
-4. Coerenza: un turno in `turni_preferiti` deve avere peso positivo; uno in
-   `turni_indesiderati` deve avere peso negativo.
-5. `flexibility_score` deve riflettere la tolleranza descritta nel testo
+4. Coerenza soft: un turno in `turni_preferiti` deve avere peso positivo; uno
+   in `turni_indesiderati` deve avere peso negativo.
+5. Separazione hard/soft: un turno in `turni_vietati` (hard) NON deve comparire
+   ne' in `turni_preferiti` ne' in `turni_indesiderati` (e' gia' escluso).
+6. `flexibility_score` deve riflettere la tolleranza descritta nel testo
    (es. "molto flessibile" -> vicino a 1.0; "bassa tolleranza" -> vicino a 0.2).
-6. Non usare import esterni, non leggere file, non stampare nulla:
+7. Non usare import esterni, non leggere file, non stampare nulla:
    definisci semplicemente il dizionario `WORKER_PREFERENCES`.
+
+### ESEMPIO DI FORMATO (struttura, non valori da copiare)
+WORKER_PREFERENCES = {{
+    "W08": {{
+        "nome": "Francesca Ricci",
+        "hard_constraints": {{
+            "turni_vietati": ["N"],
+        }},
+        "soft_constraints": {{
+            "turni_preferiti": ["M", "P"],
+            "turni_indesiderati": [],
+            "giorni_indesiderati": ["2026-12-26"],
+            "flexibility_score": 0.5,
+            "satisfaction_weights": {{"M": 5.0, "P": 3.0, "N": 0.0}},
+        }},
+    }},
+}}
 
 Restituisci SOLO un blocco di codice Python valido (racchiuso tra ```python e ```)
 che definisca `WORKER_PREFERENCES`.
@@ -139,34 +187,95 @@ che definisca `WORKER_PREFERENCES`.
 # ---------------------------------------------------------------------------
 # SALVATAGGIO DELL'OUTPUT FORMALIZZATO
 # ---------------------------------------------------------------------------
+def split_hard_soft(worker_preferences):
+    """
+    Scompone il dizionario per-lavoratore prodotto dall'LLM nelle due strutture
+    parallele richieste dal progetto:
+
+        HARD_CONSTRAINTS = {
+            "institutional": {... regole globali da input_data ...},
+            "per_worker": {wid: {"nome": ...,
+                                 "turni_vietati": [...]}, ...},
+        }
+        SOFT_CONSTRAINTS = {wid: {"nome": ...,
+                                  "turni_preferiti": [...],
+                                  "turni_indesiderati": [...],
+                                  "giorni_indesiderati": [...],
+                                  "flexibility_score": ...,
+                                  "satisfaction_weights": {...}}, ...}
+    """
+    hard_per_worker = {}
+    soft = {}
+
+    for wid, pref in worker_preferences.items():
+        hc = pref.get("hard_constraints", {})
+        sc = pref.get("soft_constraints", {})
+        nome = pref.get("nome")
+
+        hard_per_worker[wid] = {
+            "nome": nome,
+            "turni_vietati": list(hc.get("turni_vietati", [])),
+        }
+        soft[wid] = {
+            "nome": nome,
+            "turni_preferiti": list(sc.get("turni_preferiti", [])),
+            "turni_indesiderati": list(sc.get("turni_indesiderati", [])),
+            "giorni_indesiderati": list(sc.get("giorni_indesiderati", [])),
+            "flexibility_score": sc.get("flexibility_score"),
+            "satisfaction_weights": dict(sc.get("satisfaction_weights", {})),
+        }
+
+    hard = {
+        # Regole istituzionali globali (unica fonte di verita': input_data).
+        "institutional": dict(input_data.HARD_CONSTRAINTS),
+        # Vincoli hard estratti dal linguaggio naturale, per lavoratore.
+        "per_worker": hard_per_worker,
+    }
+    return hard, soft
+
+
 def save_formalized(case_label, worker_preferences):
     """
-    Serializza il dizionario WORKER_PREFERENCES in un file Python importabile
-    'formalized_preferences_case_X.py'.
+    Serializza le preferenze formalizzate in un file Python importabile
+    'formalized_preferences_case_X.py', con DUE strutture parallele esplicite:
+    HARD_CONSTRAINTS e SOFT_CONSTRAINTS (piu' una vista di compatibilita').
     """
     out_path = f"formalized_preferences_case_{case_label}.py"
     timestamp = datetime.datetime.now().isoformat(timespec="seconds")
+
+    hard, soft = split_hard_soft(worker_preferences)
 
     header = (
         '"""\n'
         f"formalized_preferences_case_{case_label}.py\n"
         f"Generato automaticamente dal Workers Agent (Fase 1) il {timestamp}.\n"
         f"Use Case {case_label}: preferenze formalizzate dei lavoratori.\n\n"
-        "Struttura per ogni lavoratore:\n"
-        "    turni_preferiti, turni_indesiderati, giorni_indisponibilita,\n"
-        "    flexibility_score (0-1) e satisfaction_weights (pesi per OR-Tools).\n"
+        "Distinzione esplicita tra Vincoli Hard e Vincoli Soft:\n"
+        "  - HARD_CONSTRAINTS : vincoli inderogabili.\n"
+        "      'institutional' -> regole globali (max ore, turni mensili, ...);\n"
+        "      'per_worker'    -> per lavoratore: turni_vietati (divieti assoluti\n"
+        "                         sul tipo di turno) estratti dal linguaggio naturale.\n"
+        "  - SOFT_CONSTRAINTS : preferenze per lavoratore (turni_preferiti,\n"
+        "      turni_indesiderati, giorni_indesiderati = richieste di ferie,\n"
+        "      flexibility_score) e satisfaction_weights (modello di soddisfazione\n"
+        "      per la funzione obiettivo OR-Tools).\n"
         '"""\n\n'
     )
 
-    corpo = "WORKER_PREFERENCES = " + pprint.pformat(
-        worker_preferences, indent=4, sort_dicts=False, width=100
-    ) + "\n"
+    def blocco(nome, valore):
+        return f"{nome} = " + pprint.pformat(
+            valore, indent=4, sort_dicts=False, width=100
+        ) + "\n\n"
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(header)
-        f.write(corpo)
+        f.write(blocco("HARD_CONSTRAINTS", hard))
+        f.write(blocco("SOFT_CONSTRAINTS", soft))
 
     print(f"[+] Preferenze formalizzate salvate in: {out_path}")
+    print(f"    - HARD_CONSTRAINTS: {len(hard['per_worker'])} lavoratori "
+          f"+ {len(hard['institutional'])} regole istituzionali")
+    print(f"    - SOFT_CONSTRAINTS: {len(soft)} lavoratori")
     return out_path
 
 

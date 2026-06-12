@@ -41,6 +41,13 @@ import input_data
 # (satisfaction_weights), scalati a interi per la funzione obiettivo CP-SAT.
 SATISFACTION_SCALE = 10  # i pesi hanno al massimo 1 cifra decimale -> *10.
 
+# Penalita' (in punti di soddisfazione) applicata quando un lavoratore viene
+# assegnato in un suo "giorno indesiderato" (richiesta di ferie). E' un vincolo
+# SOFT ad alta penalita': il solver evita questi giorni con forza, ma in caso di
+# emergenza di organico puo' comunque assegnarli invece di fallire (INFEASIBLE).
+# Deve essere molto piu' alta del peso di un turno semplicemente sgradito.
+UNDESIRED_DAY_PENALTY = 50.0
+
 
 @dataclass
 class ProblemData:
@@ -51,9 +58,14 @@ class ProblemData:
     worker_names: Dict[str, str]
     standard_ids: List[str]
     specialized_ids: List[str]
+    # Vincoli SOFT per lavoratore (turni_preferiti/indesiderati,
+    # giorni_indesiderati, flexibility_score, satisfaction_weights) dalla Fase 1.
     preferences: Dict[str, dict]
-    # Indisponibilita' come indici di giorno (0-based sull'orizzonte).
-    unavailable: Dict[str, set]
+    # Giorni indesiderati / richieste di ferie (vincolo SOFT ad alta penalita')
+    # come indici di giorno (0-based sull'orizzonte): {wid: set(indici_giorno)}.
+    undesired_days: Dict[str, set]
+    # Turni assolutamente vietati (vincolo HARD) per lavoratore: {wid: set(codici)}.
+    forbidden: Dict[str, set]
     staffing: dict
 
 
@@ -70,28 +82,46 @@ def load_problem_data(case_label: str) -> ProblemData:
     use_case = input_data.USE_CASES[case_label]
     workers = use_case["workers"]
 
-    # Preferenze formalizzate prodotte dalla Fase 1.
+    # Preferenze formalizzate prodotte dalla Fase 1: due strutture parallele
+    # HARD_CONSTRAINTS (vincoli inderogabili) e SOFT_CONSTRAINTS (preferenze).
     try:
         mod = importlib.import_module(f"formalized_preferences_case_{case_label}")
-        preferences = dict(mod.WORKER_PREFERENCES)
+        soft_constraints = dict(mod.SOFT_CONSTRAINTS)
+        hard_per_worker = dict(mod.HARD_CONSTRAINTS["per_worker"])
     except ModuleNotFoundError as exc:
         raise FileNotFoundError(
             f"Manca 'formalized_preferences_case_{case_label}.py'. "
             f"Esegui prima la Fase 1 (workers_agent.py)."
         ) from exc
+    except (AttributeError, KeyError) as exc:
+        raise ValueError(
+            f"'formalized_preferences_case_{case_label}.py' non espone le strutture "
+            f"attese HARD_CONSTRAINTS/SOFT_CONSTRAINTS. Rigenera la Fase 1 "
+            f"(workers_agent.py)."
+        ) from exc
+
+    # Le preferenze (soft) sono cio' che alimenta la funzione obiettivo e i
+    # ragionamenti sulla soddisfazione delle fasi 2/3/4.
+    preferences = soft_constraints
 
     worker_ids = [w["id"] for w in workers]
     worker_names = {w["id"]: w["nome"] for w in workers}
     standard_ids = [w["id"] for w in workers if w["ruolo"] == "standard"]
     specialized_ids = [w["id"] for w in workers if w["ruolo"] == "specializzato"]
 
-    # Mappa data ISO -> indice giorno per tradurre le indisponibilita'.
+    # Mappa data ISO -> indice giorno per tradurre le date in indici.
     iso_to_index = {d.isoformat(): i for i, d in enumerate(input_data.PLANNING_DATES)}
-    unavailable = {}
+    # Giorni indesiderati (SOFT, da SOFT_CONSTRAINTS) e turni vietati (HARD).
+    undesired_days = {}
+    forbidden = {}
     for wid in worker_ids:
-        giorni = preferences.get(wid, {}).get("giorni_indisponibilita", [])
-        unavailable[wid] = {
+        giorni = soft_constraints.get(wid, {}).get("giorni_indesiderati", [])
+        undesired_days[wid] = {
             iso_to_index[g] for g in giorni if g in iso_to_index
+        }
+        hc = hard_per_worker.get(wid, {})
+        forbidden[wid] = {
+            s for s in hc.get("turni_vietati", []) if s in input_data.SHIFT_CODES
         }
 
     return ProblemData(
@@ -101,7 +131,8 @@ def load_problem_data(case_label: str) -> ProblemData:
         standard_ids=standard_ids,
         specialized_ids=specialized_ids,
         preferences=preferences,
-        unavailable=unavailable,
+        undesired_days=undesired_days,
+        forbidden=forbidden,
         staffing=use_case["staffing"],
     )
 
@@ -184,7 +215,9 @@ Turni (codici): {", ".join(input_data.SHIFT_CODES)}
 - SHIFT_HOURS     : dict      -> ore per turno  {{'M':6,'P':6,'N':12}}
 - SHIFT_WEIGHT    : dict      -> peso per turno {{'M':1,'P':1,'N':2}} (Notte doppia)
 - PREFERENCES     : dict      -> {{wid: {{'satisfaction_weights': {{'M':..,'P':..,'N':..}}, ...}}}}
-- UNAVAILABLE     : dict      -> {{wid: set(indici_giorno) in cui NON puo' lavorare}}
+- UNDESIRED_DAYS  : dict      -> {{wid: set(indici_giorno) che il lavoratore preferirebbe NON lavorare (ferie)}}
+- UNDESIRED_DAY_PENALTY : float -> penalita' di soddisfazione per ogni turno in un giorno indesiderato
+- FORBIDDEN_SHIFTS: dict      -> {{wid: set(codici_turno) ASSOLUTAMENTE vietati al lavoratore}}
 - STANDARD_IDS    : list[str] -> id dei lavoratori standard
 - SPECIALIZED_IDS : list[str] -> id dei lavoratori specializzati (vuota nel Caso A)
 - MAX_TIME        : float     -> tempo massimo di risoluzione in secondi
@@ -200,6 +233,14 @@ Turni (codici): {", ".join(input_data.SHIFT_CODES)}
 4. La Notte e' un turno doppio: gia' riflesso in SHIFT_WEIGHT e SHIFT_HOURS.
 5. Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE (nessun turno in d+1 e d+2).
 6. Almeno 1 giorno di riposo a settimana (per ogni finestra di 7 giorni: <=6 lavorati).
+- TURNI VIETATI: nessun turno di tipo s per il lavoratore w se s in FORBIDDEN_SHIFTS[w]
+  (divieto assoluto, es. per motivi di salute). Pattern:
+  ```python
+  for w in WORKER_IDS:
+      for s in FORBIDDEN_SHIFTS[w]:
+          for d in range(NUM_DAYS):
+              model.Add(x[(w, d, s)] == 0)
+  ```
 {regola_staffing}
 
 ### IMPLEMENTAZIONE CORRETTA DEI VINCOLI - PATTERN OBBLIGATORI
@@ -220,13 +261,6 @@ for w in WORKER_IDS:
    {input_data.NUM_DAYS - 1} e {input_data.NUM_DAYS} devono essere liberi,
    ma il giorno {input_data.NUM_DAYS} non esiste: gestisci solo il giorno
    {input_data.NUM_DAYS - 1} con il check `if d + k < NUM_DAYS`.
-
-**Vincolo Max 1 turno al giorno - usa ESATTAMENTE questo pattern:**
-```python
-for w in WORKER_IDS:
-    for d in range(NUM_DAYS):
-        model.AddAtMostOne([x[(w, d, s)] for s in SHIFT_CODES])
-```
 
 **Vincolo 1 (finestra settimanale) - usa ESATTAMENTE questo pattern:**
 ```python
@@ -256,12 +290,26 @@ for w in WORKER_IDS:
 - Popola RESULT_SCHEDULE come dict annidato: {{wid: {{day_index: codice_o_None}}}}.
   Usa None (non stringa vuota, non '-') per i giorni liberi.
 
-### FUNZIONE OBIETTIVO E SODDISFAZIONE
-Massimizza la soddisfazione totale calcolata in questo modo:
-Per ogni lavoratore la soddisfazione di base e':
-   sum( PREFERENCES[w]['satisfaction_weights'][s] * x[w,d,s] ).
-A questa va SOTTRATTA una penalita' di 10.0 per ogni turno assegnato in un giorno di indisponibilita' (d in UNAVAILABLE[w]).
-Poiche' CP-SAT lavora con interi, scala sia i pesi che la penalita' per {SATISFACTION_SCALE} e arrotonda all'intero (es. penalita_scalata = 10 * {SATISFACTION_SCALE}).
+### FUNZIONE OBIETTIVO
+Massimizza la soddisfazione totale, data da DUE termini:
+  (a) soddisfazione dei turni: sum( PREFERENCES[w]['satisfaction_weights'][s] * x[w,d,s] );
+  (b) penalita' per i GIORNI INDESIDERATI (richieste di ferie): per ogni turno
+      assegnato a w in un giorno d in UNDESIRED_DAYS[w], sottrai UNDESIRED_DAY_PENALTY.
+      Questa penalita' e' molto alta: il solver evitera' con forza quei giorni,
+      ma in caso di emergenza di organico potra' comunque usarli (NON e' un divieto).
+Poiche' CP-SAT lavora con interi, scala TUTTO per {SATISFACTION_SCALE} e arrotonda
+all'intero. Pattern obbligatorio:
+```python
+obiettivo = []
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            peso = int(round(PREFERENCES[w]['satisfaction_weights'][s] * {SATISFACTION_SCALE}))
+            if d in UNDESIRED_DAYS[w]:
+                peso -= int(round(UNDESIRED_DAY_PENALTY * {SATISFACTION_SCALE}))
+            obiettivo.append(peso * x[(w, d, s)])
+model.Maximize(sum(obiettivo))
+```
 
 ### COSA DEVE PRODURRE IL CODICE
 - Crea le variabili booleane x[(w,d,s)].
@@ -272,39 +320,35 @@ Poiche' CP-SAT lavora con interi, scala sia i pesi che la penalita' per {SATISFA
     RESULT_SCHEDULE : dict {{wid: {{day_index: codice_turno_o_None}}}}
     SOLVER_STATUS   : str con il nome dello status (es. solver.StatusName(status))
 
-### ESEMPIO DI STRUTTURA BASE CHE DEVI SEGUIRE
-```python
-model = cp_model.CpModel()
-x = {{}}
-for w in WORKER_IDS:
-    for d in range(NUM_DAYS):
-        for s in SHIFT_CODES:
-            x[(w, d, s)] = model.NewBoolVar(f"x_{{w}}_{{d}}_{{s}}")
-
-# ... (inserisci qui i tuoi vincoli e la funzione obiettivo) ...
-
-solver = cp_model.CpSolver()
-solver.parameters.max_time_in_seconds = MAX_TIME
-solver.parameters.num_search_workers = 8
-status = solver.Solve(model)
-
-RESULT_SCHEDULE = {{}}
-if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-    for w in WORKER_IDS:
-        RESULT_SCHEDULE[w] = {{}}
-        for d in range(NUM_DAYS):
-            RESULT_SCHEDULE[w][d] = None
-            for s in SHIFT_CODES:
-                if solver.Value(x[(w, d, s)]):
-                    RESULT_SCHEDULE[w][d] = s
-SOLVER_STATUS = solver.StatusName(status)
-```
-
 NON stampare nulla, NON leggere/scrivere file, NON ridefinire le variabili gia'
 disponibili. Restituisci SOLO un blocco di codice Python valido (racchiuso tra
 ```python e ```).
 """
     return prompt
+
+
+def worker_satisfaction(data: ProblemData, schedule: dict, w: str) -> float:
+    """
+    Soddisfazione di un lavoratore secondo il modello unico usato in tutte le fasi:
+
+        sat(w) = somma(satisfaction_weights[turno]  per ogni turno assegnato)
+               - UNDESIRED_DAY_PENALTY * (numero di turni in giorni indesiderati)
+
+    Il termine di penalita' rende coerenti l'obiettivo del solver (Fasi 2/4) con
+    le metriche di equita' (Fase 3): un lavoratore costretto a lavorare in un
+    giorno di ferie risulta correttamente molto piu' insoddisfatto.
+    """
+    pesi = data.preferences[w]["satisfaction_weights"]
+    giorni_ind = data.undesired_days.get(w, set())
+    totale = 0.0
+    for d in range(input_data.NUM_DAYS):
+        code = schedule[w].get(d)
+        if code is None:
+            continue
+        totale += pesi[code]
+        if d in giorni_ind:
+            totale -= UNDESIRED_DAY_PENALTY
+    return round(totale, 2)
 
 
 def _build_llm_context(data: ProblemData, max_time: float) -> dict:
@@ -317,7 +361,9 @@ def _build_llm_context(data: ProblemData, max_time: float) -> dict:
         "SHIFT_HOURS": {s: shifts[s]["durata_ore"] for s in input_data.SHIFT_CODES},
         "SHIFT_WEIGHT": {s: shifts[s]["peso_turni"] for s in input_data.SHIFT_CODES},
         "PREFERENCES": data.preferences,
-        "UNAVAILABLE": {w: set(v) for w, v in data.unavailable.items()},
+        "UNDESIRED_DAYS": {w: set(v) for w, v in data.undesired_days.items()},
+        "UNDESIRED_DAY_PENALTY": UNDESIRED_DAY_PENALTY,
+        "FORBIDDEN_SHIFTS": {w: set(v) for w, v in data.forbidden.items()},
         "STANDARD_IDS": list(data.standard_ids),
         "SPECIALIZED_IDS": list(data.specialized_ids),
         "MAX_TIME": max_time,
@@ -357,14 +403,7 @@ def build_schedule_result(
         generated_code=generated_code,
     )
     for w in data.worker_ids:
-        pesi = data.preferences[w]["satisfaction_weights"]
-        soddisfazione_base = sum(pesi[s] for d in range(input_data.NUM_DAYS)
-                                 for s in input_data.SHIFT_CODES if schedule[w].get(d) == s)
-        # Sottrai penalita' di 10.0 per ogni turno in un giorno indisponibile
-        indisp = data.unavailable.get(w, set())
-        turni_indisp = sum(1 for d in range(input_data.NUM_DAYS) 
-                           if schedule[w].get(d) is not None and d in indisp)
-        result.satisfaction_per_worker[w] = round(soddisfazione_base - (turni_indisp * 10.0), 2)
+        result.satisfaction_per_worker[w] = worker_satisfaction(data, schedule, w)
     result.objective_value = round(sum(result.satisfaction_per_worker.values()), 2)
     return result
 

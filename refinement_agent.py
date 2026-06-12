@@ -38,9 +38,6 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from dotenv import load_dotenv
-load_dotenv()
-
 import input_data
 from drafting_agent import (
     ProblemData,
@@ -77,12 +74,35 @@ def build_refinement_prompt(
     della bozza corrente per migliorare il lavoratore piu' svantaggiato, senza
     far scendere nessun altro sotto il livello minimo attuale e mantenendo
     intatti tutti i vincoli hard.
+
+    Il prompt e' allineato alla specifica della Fase 4:
+    - elenca esplicitamente le strategie di raffinamento ammesse;
+    - chiede di considerare le preferenze e le priorita' di TUTTI i lavoratori;
+    - lascia liberta' creativa all'LLM (non impone solo il vincolo di pavimento);
+    - richiede comunque il vincolo di equita' come garanzia minima.
     """
     floor_scaled = int(round(current_min * SATISFACTION_SCALE))
 
+    # Riepilogo compatto delle preferenze di tutti i lavoratori (turni
+    # preferiti / indesiderati) per guidare le strategie di riassegnazione.
+    pref_lines = []
+    for wid in data.worker_ids:
+        p = data.preferences.get(wid, {})
+        graditi = ", ".join(p.get("turni_preferiti", [])) or "nessuno"
+        sgraditi = ", ".join(p.get("turni_indesiderati", [])) or "nessuno"
+        ferie = ", ".join(p.get("giorni_indesiderati", [])) or "nessuna"
+        flex = p.get("flexibility_score", 0.5)
+        pref_lines.append(
+            f"  {wid} ({data.worker_names[wid]}): "
+            f"preferiti={graditi}, indesiderati={sgraditi}, "
+            f"ferie_richieste={ferie}, flessibilita'={flex}"
+        )
+    pref_summary = "\n".join(pref_lines)
+
     return f"""Sei il "Drafting Agent" di SmartScheduler nella FASE 4 (raffinamento iterativo
 dell'equita'). Hai gia' prodotto una bozza VALIDA per lo USE CASE {data.case_label}:
-il codice cp_model qui sotto rispetta tutti i vincoli hard. Ora devi MIGLIORARLO.
+il codice cp_model qui sotto rispetta tutti i vincoli hard. Ora devi MIGLIORARLO
+per aumentare l'equita' dell'orario.
 
 ### CODICE cp_model DELLA BOZZA CORRENTE (da modificare, NON da riscrivere da zero)
 ```python
@@ -90,60 +110,71 @@ il codice cp_model qui sotto rispetta tutti i vincoli hard. Ora devi MIGLIORARLO
 ```
 
 ### OBIETTIVO DEL RAFFINAMENTO
-Modifica questo codice per migliorare il punteggio di soddisfazione del lavoratore
-{worst_worker_id} ({worst_worker_name}), che e' attualmente il piu' svantaggiato
-con un punteggio di {current_min}.
+Migliora il punteggio di soddisfazione del lavoratore {worst_worker_id} ({worst_worker_name}),
+che e' attualmente il PIU' SVANTAGGIATO con un punteggio di {current_min}.
 
-REGOLA FONDAMENTALE (inderogabile):
-- DEVI restituire il codice precedente ESATTAMENTE COM'È, riga per riga.
-- Aggiungi il nuovo blocco di codice per l'equità e l'hinting ESCLUSIVAMENTE alla fine, subito prima della chiamata a solver.Solve(model).
-- È severamente vietato alterare, riassumere o rimuovere i vincoli hard precedenti.
-- NON devi far scendere il punteggio di NESSUN altro lavoratore al di sotto di
-  {current_min} (il livello minimo di soddisfazione attuale).
+Il miglioramento e' valido SOLO SE non peggiora il livello minimo di soddisfazione
+degli ALTRI lavoratori (cioe' nessun altro deve scendere sotto {current_min}).
 
-### COME IMPORLO NEL MODELLO (pattern obbligatorio)
-Nel namespace sono GIA' disponibili, oltre alle variabili della bozza:
-- SATISFACTION_SCALE : int -> {SATISFACTION_SCALE} (fattore di scala dei pesi)
-- WORST_WORKER_ID    : str -> '{worst_worker_id}' (il lavoratore da migliorare)
-- NEW_FLOOR_SCALED   : int -> {new_floor_scaled} (nuovo pavimento di equita', scalato)
+### PREFERENZE E PRIORITA' DI TUTTI I LAVORATORI
+Considera queste preferenze per guidare qualsiasi riassegnazione di turni:
+{pref_summary}
 
-La soddisfazione (scalata a interi) di un lavoratore w e':
-```python
-sat_w = sum(int(round(PREFERENCES[w]['satisfaction_weights'][s] * SATISFACTION_SCALE)) * x[(w, d, s)]
-            for d in range(NUM_DAYS) for s in SHIFT_CODES)
-penalita_scalata = int(round(10.0 * SATISFACTION_SCALE))
-for d in UNAVAILABLE.get(w, []):
-    for s in SHIFT_CODES:
-        sat_w -= penalita_scalata * x[(w, d, s)]
-```
-Aggiungi, PRIMA di risolvere, un vincolo di EQUITA' che alza il pavimento per
-TUTTI i lavoratori al nuovo livello richiesto (cosi' il minimo globale sale e
-nessuno scende sotto quello attuale):
+Le preferenze sono riflesse nei `satisfaction_weights` all'interno di PREFERENCES[w].
+
+### STRATEGIE DI RAFFINAMENTO DISPONIBILI
+Puoi usare una o piu' di queste strategie per migliorare l'equita':
+
+1. **Riassegnazione di turni indesiderati**: togli a {worst_worker_id} i turni
+   con peso negativo e assegnali a lavoratori piu' flessibili o che li preferiscono.
+
+2. **Bilanciamento del carico di lavoro**: redistribuisci i turni pesanti (es. Notte)
+   tra i lavoratori in modo piu' uniforme, riducendo la concentrazione sui piu' svantaggiati.
+
+3. **Miglioramento dei lavoratori svantaggiati**: assegna a {worst_worker_id} turni
+   con peso positivo nei giorni in cui e' disponibile e in cui non viola i vincoli hard.
+
+4. **Riduzione della disuguaglianza di scheduling**: identifica coppie di lavoratori
+   in cui uno ha soddisfazione molto alta e l'altro molto bassa e bilancia lo scambio,
+   rispettando le preferenze di entrambi.
+
+### VINCOLO DI EQUITA' OBBLIGATORIO (garanzia minima)
+Indipendentemente dalla strategia scelta, DEVI aggiungere PRIMA di risolvere
+il seguente vincolo che garantisce che il minimo globale non scenda:
+
+Nel namespace sono GIA' disponibili:
+- SATISFACTION_SCALE : int -> {SATISFACTION_SCALE}
+- UNDESIRED_DAYS     : dict -> {{wid: set(indici_giorno) di ferie richieste}}
+- UNDESIRED_DAY_PENALTY : float -> penalita' per turno in un giorno indesiderato
+- WORST_WORKER_ID    : str -> '{worst_worker_id}'
+- NEW_FLOOR_SCALED   : int -> {new_floor_scaled} (nuovo pavimento scalato)
+
+Il punteggio di soddisfazione include la penalita' per i giorni indesiderati,
+quindi calcolalo ESATTAMENTE come nell'obiettivo (stesso modello):
 ```python
 for w in WORKER_IDS:
-    sat_w = sum(int(round(PREFERENCES[w]['satisfaction_weights'][s] * SATISFACTION_SCALE)) * x[(w, d, s)]
-                for d in range(NUM_DAYS) for s in SHIFT_CODES)
-    penalita_scalata = int(round(10.0 * SATISFACTION_SCALE))
-    for d in UNAVAILABLE.get(w, []):
-        for s in SHIFT_CODES:
-            sat_w -= penalita_scalata * x[(w, d, s)]
-    model.Add(sat_w >= NEW_FLOOR_SCALED)
-```
-
-Aggiungi SEMPRE il Warm-Starting (Hinting) per abbattere i tempi di risoluzione, iniettando la schedulazione precedente subito prima del solver.Solve(model):
-```python
-for w in WORKER_IDS:
+    sat_terms = []
     for d in range(NUM_DAYS):
         for s in SHIFT_CODES:
-            if PREVIOUS_SCHEDULE.get(w, {{}}).get(d) == s:
-                model.AddHint(x[(w, d, s)], 1)
-            else:
-                model.AddHint(x[(w, d, s)], 0)
+            peso = int(round(PREFERENCES[w]['satisfaction_weights'][s] * SATISFACTION_SCALE))
+            if d in UNDESIRED_DAYS[w]:
+                peso -= int(round(UNDESIRED_DAY_PENALTY * SATISFACTION_SCALE))
+            sat_terms.append(peso * x[(w, d, s)])
+    model.Add(sum(sat_terms) >= NEW_FLOOR_SCALED)
 ```
-Mantieni la funzione obiettivo che massimizza la soddisfazione totale (puoi
-lasciarla invariata). Se imporre questo pavimento rende il modello INFEASIBLE,
-NON rilassare i vincoli hard: lascia semplicemente che il solver restituisca
-INFEASIBLE (significa che l'equita' non e' ulteriormente migliorabile).
+
+Mantieni la funzione obiettivo che massimizza la soddisfazione totale (turni +
+penalita' per i giorni indesiderati).
+Se imporre questo pavimento rende il modello INFEASIBLE, NON rilassare
+i vincoli hard: lascia che il solver restituisca INFEASIBLE.
+
+### REGOLE INDEROGABILI
+- Mantieni INTATTI tutti i vincoli hard: 36h/settimana, 25 turni mensili pesati,
+  divieto Notte->Mattina, 2 riposi dopo la Notte, >=1 riposo settimanale,
+  staffing e turni vietati (FORBIDDEN_SHIFTS). NON rimuovere ne' indebolire
+  alcun vincolo. (I giorni di ferie NON sono un vincolo hard: restano gestiti
+  dalla penalita' nell'obiettivo.)
+- NON ridefinire le variabili gia' disponibili nel namespace.
 
 ### COSA DEVE PRODURRE IL CODICE (invariato rispetto alla bozza)
 - Risolvi con cp_model.CpSolver() (max_time_in_seconds = MAX_TIME,
@@ -152,8 +183,8 @@ INFEASIBLE (significa che l'equita' non e' ulteriormente migliorabile).
     RESULT_SCHEDULE : dict {{wid: {{day_index: codice_turno_o_None}}}}
     SOLVER_STATUS   : str con il nome dello status (solver.StatusName(status))
 
-NON stampare nulla, NON leggere/scrivere file, NON ridefinire le variabili gia'
-disponibili. Restituisci SOLO un blocco di codice Python valido (tra ```python e ```).
+NON stampare nulla, NON leggere/scrivere file. Restituisci SOLO un blocco
+di codice Python valido (tra ```python e ```).
 """
 
 
@@ -196,14 +227,13 @@ def _is_infeasible(result: ScheduleResult) -> bool:
 
 
 def _build_refinement_context(
-    data: ProblemData, max_time: float, worst_worker_id: str, new_floor_scaled: int, previous_schedule: dict
+    data: ProblemData, max_time: float, worst_worker_id: str, new_floor_scaled: int
 ) -> dict:
     """Namespace di esecuzione: contesto della bozza + variabili di equita' della Fase 4."""
     ctx = _build_llm_context(data, max_time)
     ctx["SATISFACTION_SCALE"] = SATISFACTION_SCALE
     ctx["WORST_WORKER_ID"] = worst_worker_id
     ctx["NEW_FLOOR_SCALED"] = new_floor_scaled
-    ctx["PREVIOUS_SCHEDULE"] = previous_schedule
     return ctx
 
 
@@ -274,7 +304,7 @@ def run_refinement_loop(
             data, current_code, worst_id, worst_name, current_min, new_floor_scaled
         )
         context_vars = _build_refinement_context(
-            data, max_time, worst_id, new_floor_scaled, best_result.schedule
+            data, max_time, worst_id, new_floor_scaled
         )
 
         # --- STEP 2: esegui il nuovo codice (motore Fase 0, auto-correzione) ---
