@@ -95,12 +95,11 @@ Modifica questo codice per migliorare il punteggio di soddisfazione del lavorato
 con un punteggio di {current_min}.
 
 REGOLA FONDAMENTALE (inderogabile):
+- DEVI restituire il codice precedente ESATTAMENTE COM'È, riga per riga.
+- Aggiungi il nuovo blocco di codice per l'equità e l'hinting ESCLUSIVAMENTE alla fine, subito prima della chiamata a solver.Solve(model).
+- È severamente vietato alterare, riassumere o rimuovere i vincoli hard precedenti.
 - NON devi far scendere il punteggio di NESSUN altro lavoratore al di sotto di
   {current_min} (il livello minimo di soddisfazione attuale).
-- Devi MANTENERE INTATTI tutti i vincoli hard gia' presenti nel codice (sono
-  LEGGI inviolabili): 36h/settimana, 25 turni mensili pesati, divieto
-  Notte->Mattina, 2 riposi dopo la Notte, >=1 riposo settimanale, staffing,
-  indisponibilita'. NON rimuovere ne' indebolire alcun vincolo esistente.
 
 ### COME IMPORLO NEL MODELLO (pattern obbligatorio)
 Nel namespace sono GIA' disponibili, oltre alle variabili della bozza:
@@ -129,6 +128,17 @@ for w in WORKER_IDS:
         for s in SHIFT_CODES:
             sat_w -= penalita_scalata * x[(w, d, s)]
     model.Add(sat_w >= NEW_FLOOR_SCALED)
+```
+
+Aggiungi SEMPRE il Warm-Starting (Hinting) per abbattere i tempi di risoluzione, iniettando la schedulazione precedente subito prima del solver.Solve(model):
+```python
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            if PREVIOUS_SCHEDULE.get(w, {{}}).get(d) == s:
+                model.AddHint(x[(w, d, s)], 1)
+            else:
+                model.AddHint(x[(w, d, s)], 0)
 ```
 Mantieni la funzione obiettivo che massimizza la soddisfazione totale (puoi
 lasciarla invariata). Se imporre questo pavimento rende il modello INFEASIBLE,
@@ -186,13 +196,14 @@ def _is_infeasible(result: ScheduleResult) -> bool:
 
 
 def _build_refinement_context(
-    data: ProblemData, max_time: float, worst_worker_id: str, new_floor_scaled: int
+    data: ProblemData, max_time: float, worst_worker_id: str, new_floor_scaled: int, previous_schedule: dict
 ) -> dict:
     """Namespace di esecuzione: contesto della bozza + variabili di equita' della Fase 4."""
     ctx = _build_llm_context(data, max_time)
     ctx["SATISFACTION_SCALE"] = SATISFACTION_SCALE
     ctx["WORST_WORKER_ID"] = worst_worker_id
     ctx["NEW_FLOOR_SCALED"] = new_floor_scaled
+    ctx["PREVIOUS_SCHEDULE"] = previous_schedule
     return ctx
 
 
@@ -263,7 +274,7 @@ def run_refinement_loop(
             data, current_code, worst_id, worst_name, current_min, new_floor_scaled
         )
         context_vars = _build_refinement_context(
-            data, max_time, worst_id, new_floor_scaled
+            data, max_time, worst_id, new_floor_scaled, best_result.schedule
         )
 
         # --- STEP 2: esegui il nuovo codice (motore Fase 0, auto-correzione) ---

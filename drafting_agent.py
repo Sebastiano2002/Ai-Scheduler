@@ -221,6 +221,13 @@ for w in WORKER_IDS:
    ma il giorno {input_data.NUM_DAYS} non esiste: gestisci solo il giorno
    {input_data.NUM_DAYS - 1} con il check `if d + k < NUM_DAYS`.
 
+**Vincolo Max 1 turno al giorno - usa ESATTAMENTE questo pattern:**
+```python
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        model.AddAtMostOne([x[(w, d, s)] for s in SHIFT_CODES])
+```
+
 **Vincolo 1 (finestra settimanale) - usa ESATTAMENTE questo pattern:**
 ```python
 for w in WORKER_IDS:
@@ -264,6 +271,34 @@ Poiche' CP-SAT lavora con interi, scala sia i pesi che la penalita' per {SATISFA
 - Poi DEVI popolare nel namespace queste due variabili:
     RESULT_SCHEDULE : dict {{wid: {{day_index: codice_turno_o_None}}}}
     SOLVER_STATUS   : str con il nome dello status (es. solver.StatusName(status))
+
+### ESEMPIO DI STRUTTURA BASE CHE DEVI SEGUIRE
+```python
+model = cp_model.CpModel()
+x = {{}}
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            x[(w, d, s)] = model.NewBoolVar(f"x_{{w}}_{{d}}_{{s}}")
+
+# ... (inserisci qui i tuoi vincoli e la funzione obiettivo) ...
+
+solver = cp_model.CpSolver()
+solver.parameters.max_time_in_seconds = MAX_TIME
+solver.parameters.num_search_workers = 8
+status = solver.Solve(model)
+
+RESULT_SCHEDULE = {{}}
+if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+    for w in WORKER_IDS:
+        RESULT_SCHEDULE[w] = {{}}
+        for d in range(NUM_DAYS):
+            RESULT_SCHEDULE[w][d] = None
+            for s in SHIFT_CODES:
+                if solver.Value(x[(w, d, s)]):
+                    RESULT_SCHEDULE[w][d] = s
+SOLVER_STATUS = solver.StatusName(status)
+```
 
 NON stampare nulla, NON leggere/scrivere file, NON ridefinire le variabili gia'
 disponibili. Restituisci SOLO un blocco di codice Python valido (racchiuso tra

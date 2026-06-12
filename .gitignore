@@ -17,3 +17,6 @@ Thumbs.db
 
 # File Generati Dinamicamente (Opzionale: commenta se preferisci committarli)
 formalized_preferences_case_*.py
+
+# Cache LLM
+.llm_cache/
