@@ -200,7 +200,6 @@ Turni (codici): {", ".join(input_data.SHIFT_CODES)}
 4. La Notte e' un turno doppio: gia' riflesso in SHIFT_WEIGHT e SHIFT_HOURS.
 5. Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE (nessun turno in d+1 e d+2).
 6. Almeno 1 giorno di riposo a settimana (per ogni finestra di 7 giorni: <=6 lavorati).
-- INDISPONIBILITA': nessun turno nei giorni in UNAVAILABLE[w].
 {regola_staffing}
 
 ### IMPLEMENTAZIONE CORRETTA DEI VINCOLI - PATTERN OBBLIGATORI
@@ -250,11 +249,12 @@ for w in WORKER_IDS:
 - Popola RESULT_SCHEDULE come dict annidato: {{wid: {{day_index: codice_o_None}}}}.
   Usa None (non stringa vuota, non '-') per i giorni liberi.
 
-### FUNZIONE OBIETTIVO
-Massimizza la soddisfazione totale:
+### FUNZIONE OBIETTIVO E SODDISFAZIONE
+Massimizza la soddisfazione totale calcolata in questo modo:
+Per ogni lavoratore la soddisfazione di base e':
    sum( PREFERENCES[w]['satisfaction_weights'][s] * x[w,d,s] ).
-Poiche' CP-SAT lavora con interi, scala i pesi per {SATISFACTION_SCALE} e arrotonda
-all'intero (int(round(peso * {SATISFACTION_SCALE}))).
+A questa va SOTTRATTA una penalita' di 10.0 per ogni turno assegnato in un giorno di indisponibilita' (d in UNAVAILABLE[w]).
+Poiche' CP-SAT lavora con interi, scala sia i pesi che la penalita' per {SATISFACTION_SCALE} e arrotonda all'intero (es. penalita_scalata = 10 * {SATISFACTION_SCALE}).
 
 ### COSA DEVE PRODURRE IL CODICE
 - Crea le variabili booleane x[(w,d,s)].
@@ -323,11 +323,13 @@ def build_schedule_result(
     )
     for w in data.worker_ids:
         pesi = data.preferences[w]["satisfaction_weights"]
-        result.satisfaction_per_worker[w] = round(
-            sum(pesi[s] for d in range(input_data.NUM_DAYS)
-                for s in input_data.SHIFT_CODES if schedule[w].get(d) == s),
-            2,
-        )
+        soddisfazione_base = sum(pesi[s] for d in range(input_data.NUM_DAYS)
+                                 for s in input_data.SHIFT_CODES if schedule[w].get(d) == s)
+        # Sottrai penalita' di 10.0 per ogni turno in un giorno indisponibile
+        indisp = data.unavailable.get(w, set())
+        turni_indisp = sum(1 for d in range(input_data.NUM_DAYS) 
+                           if schedule[w].get(d) is not None and d in indisp)
+        result.satisfaction_per_worker[w] = round(soddisfazione_base - (turni_indisp * 10.0), 2)
     result.objective_value = round(sum(result.satisfaction_per_worker.values()), 2)
     return result
 

@@ -129,8 +129,8 @@ class AgentExecutor:
             context_vars.update(namespace)
             return True, context_vars
 
-        except Exception:
-            # Se l'LLM ha scritto codice non valido (es. KeyError, SyntaxError)
+        except BaseException as e:
+            # Se l'LLM ha scritto codice non valido (es. KeyError, SyntaxError) o usa exit()
             errore_dettagliato = traceback.format_exc()
             return False, errore_dettagliato
 

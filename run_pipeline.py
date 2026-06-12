@@ -34,6 +34,9 @@ Esecuzione (richiede la variabile d'ambiente GEMINI_API_KEY):
 
 import argparse
 import importlib
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import workers_agent
 from llm_engine import AgentExecutor

@@ -212,17 +212,6 @@ class HardConstraintVerifier:
                         f"catena VIETATA Notte(giorno {d}) -> Mattina(giorno {d+1})",
                         w, d + 1))
 
-    # -- indisponibilita' (preferenze Fase 1, trattate come hard) -----------
-    def _check_availability(self, sched, viol):
-        for w in self.data.worker_ids:
-            indisp = self.data.unavailable.get(w, set())
-            for d in indisp:
-                if sched[w].get(d) is not None:
-                    viol.append(Violation(
-                        "AVAIL",
-                        f"lavora ('{sched[w][d]}') in un giorno di indisponibilita'",
-                        w, d))
-
     # -- copertura / staffing (dipende dallo use case) ----------------------
     def _check_staffing(self, sched, viol):
         for d in range(self.num_days):
@@ -276,7 +265,6 @@ class HardConstraintVerifier:
         self._check_weekly_windows(sched, viol)
         self._check_rest_after_night(sched, viol)
         self._check_night_to_morning(sched, viol)
-        self._check_availability(sched, viol)
         self._check_staffing(sched, viol)
         return viol
 

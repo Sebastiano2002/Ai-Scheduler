@@ -38,6 +38,9 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import input_data
 from drafting_agent import (
     ProblemData,
@@ -109,6 +112,10 @@ La soddisfazione (scalata a interi) di un lavoratore w e':
 ```python
 sat_w = sum(int(round(PREFERENCES[w]['satisfaction_weights'][s] * SATISFACTION_SCALE)) * x[(w, d, s)]
             for d in range(NUM_DAYS) for s in SHIFT_CODES)
+penalita_scalata = int(round(10.0 * SATISFACTION_SCALE))
+for d in UNAVAILABLE.get(w, []):
+    for s in SHIFT_CODES:
+        sat_w -= penalita_scalata * x[(w, d, s)]
 ```
 Aggiungi, PRIMA di risolvere, un vincolo di EQUITA' che alza il pavimento per
 TUTTI i lavoratori al nuovo livello richiesto (cosi' il minimo globale sale e
@@ -117,6 +124,10 @@ nessuno scende sotto quello attuale):
 for w in WORKER_IDS:
     sat_w = sum(int(round(PREFERENCES[w]['satisfaction_weights'][s] * SATISFACTION_SCALE)) * x[(w, d, s)]
                 for d in range(NUM_DAYS) for s in SHIFT_CODES)
+    penalita_scalata = int(round(10.0 * SATISFACTION_SCALE))
+    for d in UNAVAILABLE.get(w, []):
+        for s in SHIFT_CODES:
+            sat_w -= penalita_scalata * x[(w, d, s)]
     model.Add(sat_w >= NEW_FLOOR_SCALED)
 ```
 Mantieni la funzione obiettivo che massimizza la soddisfazione totale (puoi
