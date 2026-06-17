@@ -11,10 +11,6 @@ Questo modulo implementa l'`AgentExecutor`, lo strato che:
     4. reinvia gli errori all'LLM per l'auto-correzione, con un numero massimo
        di tentativi (`run_with_retry`).
 
-L'interfaccia pubblica (generate_and_extract, safe_execute, run_with_retry)
-e' identica alla versione precedente: cambia solo il backend di comunicazione,
-ora Google Gemini 2.5 Flash via API remota.
-
 Prerequisito: impostare la variabile d'ambiente GEMINI_API_KEY (oppure passare
 la chiave direttamente al costruttore tramite il parametro `api_key`).
 """

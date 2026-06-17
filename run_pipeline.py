@@ -35,17 +35,17 @@ Esecuzione (richiede la variabile d'ambiente GEMINI_API_KEY):
 import argparse
 import importlib
 
-import workers_agent
+import Fase1_workers_agent
 from llm_engine import AgentExecutor
-from drafting_agent import (
+from Fase2_drafting_agent import (
     export_csv,
     load_problem_data,
     print_summary,
     run_llm_drafting,
     save_generated_code,
 )
-from verification_agent import print_report, verify_schedule
-from refinement_agent import print_refinement_summary, run_refinement_loop
+from Fase3_verification_agent import print_report, verify_schedule
+from Fase4_refinement_agent import print_refinement_summary, run_refinement_loop
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +57,8 @@ def run_phase_1(executor, case_label):
     print(f"# PIPELINE | FASE 1 - WORKERS AGENT | Caso {case_label}")
     print(f"{'#'*64}")
 
-    preferences_text = workers_agent.load_preferences_text()
-    out_path = workers_agent.formalize_case(executor, case_label, preferences_text)
+    preferences_text = Fase1_workers_agent.load_preferences_text()
+    out_path = Fase1_workers_agent.formalize_case(executor, case_label, preferences_text)
     if out_path is None:
         raise SystemExit(
             f"[!] Pipeline interrotta: la Fase 1 non ha prodotto le preferenze "
@@ -198,8 +198,12 @@ def main():
         help="Tempo massimo del solver per risoluzione in secondi (default: 60).",
     )
     parser.add_argument(
-        "--max-iterations", type=int, default=3,
-        help="Iterazioni massime del ciclo di raffinamento (default: 3).",
+        "--max-iterations", type=int, default=25,
+        help="SALVAGUARDIA: tetto dei livelli leximin del raffinamento (default: "
+             "25, sopra il n. di lavoratori cosi' il leximin puo' completarsi). "
+             "Solo il 1o livello e' una chiamata LLM; i successivi ri-eseguono lo "
+             "stesso template (solo risoluzione CP). Il ciclo termina di norma "
+             "quando tutti i lavoratori sono fissati o non si migliora piu'.",
     )
     parser.add_argument(
         "--max-draft-attempts", type=int, default=3,

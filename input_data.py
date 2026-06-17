@@ -67,8 +67,14 @@ HARD_CONSTRAINTS = {
     "turni_mensili_esatti": 25,
     # Al massimo un turno per giorno per lavoratore.
     "max_turni_per_giorno": 1,
-    # Divieto assoluto di lavorare in due giorni di calendario consecutivi.
-    "turni_consecutivi_vietati": True,
+    # "Due turni consecutivi" vietati: dato il limite di 1 turno/giorno, l'unica
+    # coppia a cavallo di due giorni temporalmente CONTIGUA e' Notte (d, 20:00->
+    # 08:00) seguita da Mattina (d+1, 08:00->14:00). E' questa la catena vietata
+    # (gia' implicata anche dai 2 riposi obbligatori dopo la Notte). Lavorare in
+    # giorni di calendario consecutivi con turni DIURNI e' invece PERMESSO: NON
+    # e' un divieto di lavorare in giorni adiacenti (sarebbe infeasible con 25
+    # turni su 31 giorni). Verificato in Fase3_verification_agent._check_night_to_morning.
+    "catena_turni_contigui_vietata": "N->M",
     # Il turno di notte e' un turno doppio (12h).
     "notte_turno_doppio": True,
     # Giorni di riposo obbligatori subito dopo un turno di notte.

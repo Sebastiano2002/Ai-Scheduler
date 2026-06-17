@@ -101,7 +101,14 @@ class WorkerSoftConstraints(BaseModel):
         ...,
         ge=0.0,
         le=1.0,
-        description="Tolleranza ai turni indesiderati, tra 0.0 (rigido) e 1.0 (flessibile).",
+        description=(
+            "Tolleranza ai turni indesiderati, tra 0.0 (rigido) e 1.0 (flessibile). "
+            "E' la categoria soft 'Individual tolerance levels' del progetto. Per "
+            "DESIGN non entra come parametro separato nel modello OR-Tools (sarebbe "
+            "un doppio conteggio): la tolleranza e' gia' incorporata nella grandezza "
+            "dei satisfaction_weights negativi, che la Fase 1 fissa in funzione di "
+            "questo score (~ -6*(1-flexibility_score) per un turno indesiderato)."
+        ),
     )
     satisfaction_weights: Dict[str, float] = Field(
         ...,
