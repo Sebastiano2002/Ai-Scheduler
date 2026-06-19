@@ -4,17 +4,32 @@ models.py
 Fase 1 - Modelli Pydantic per l'output strutturato del Workers Agent.
 
 Questo modulo definisce i modelli che descrivono e validano le preferenze
-formalizzate dei lavoratori prodotte dall'LLM:
+formalizzate dei lavoratori prodotte dall'LLM, con una distinzione ESPLICITA
+tra Vincoli Hard e Vincoli Soft (requisito del progetto):
 
-    - WorkerPreference      : preferenze di un singolo lavoratore;
-    - AllWorkerPreferences  : wrapper sul dizionario {worker_id: WorkerPreference}.
+    - WorkerHardConstraints : vincoli HARD del singolo lavoratore (inderogabili);
+    - WorkerSoftConstraints : vincoli SOFT (preferenze) + modello di soddisfazione;
+    - WorkerPreference       : unisce hard + soft per un singolo lavoratore;
+    - AllWorkerPreferences   : wrapper sul dizionario {worker_id: WorkerPreference}.
+
+Distinzione Hard vs Soft a livello di singolo lavoratore:
+    * HARD (devono SEMPRE valere):
+        - turni_vietati          : turni assolutamente vietati (es. divieto medico).
+    * SOFT (preferenze, guidano la funzione obiettivo):
+        - turni_preferiti, turni_indesiderati, flexibility_score;
+        - giorni_indesiderati    : richieste di ferie / giorni che il lavoratore
+          preferirebbe NON lavorare (penalizzazione alta nell'obiettivo, non un
+          divieto: in emergenza il solver puo' comunque assegnarli);
+        - satisfaction_weights (il "modello di soddisfazione").
 
 I validatori garantiscono che i dati generati dall'LLM rispettino le regole
-del problema (codici turno ammessi, flexibility_score nel range [0, 1],
-coerenza tra preferenze e pesi di soddisfazione) prima di essere salvati e
-riutilizzati dalle fasi successive (modello OR-Tools).
+del problema (codici turno ammessi, date ISO valide, flexibility_score nel
+range [0, 1], coerenza tra preferenze e pesi di soddisfazione, separazione
+tra vincoli hard e soft) prima di essere salvati e riutilizzati dalle fasi
+successive (modello OR-Tools).
 """
 
+from datetime import date
 from typing import Dict, List
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -23,31 +38,81 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 ALLOWED_SHIFT_CODES = {"M", "P", "N"}
 
 
-class WorkerPreference(BaseModel):
-    """Preferenze formalizzate di un singolo lavoratore."""
+# ===========================================================================
+# VINCOLI HARD DEL SINGOLO LAVORATORE
+# ===========================================================================
+class WorkerHardConstraints(BaseModel):
+    """
+    Vincoli HARD (inderogabili) specifici di un lavoratore, estratti dal
+    linguaggio naturale. Devono sempre essere rispettati dalla schedulazione.
 
-    nome: str = Field(..., description="Nome completo del lavoratore.")
+    Nota: i giorni di ferie/indisponibilita' NON sono qui: sono modellati come
+    vincolo SOFT ad alta penalita' (vedi WorkerSoftConstraints.giorni_indesiderati),
+    per evitare schedulazioni INFEASIBLE in caso di emergenza di organico.
+    """
+
+    turni_vietati: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Codici turno ASSOLUTAMENTE vietati per il lavoratore "
+            "(es. divieto per motivi di salute)."
+        ),
+    )
+
+    @field_validator("turni_vietati")
+    @classmethod
+    def _check_shift_codes(cls, value: List[str]) -> List[str]:
+        """I codici turno vietati devono appartenere ai soli ammessi (M/P/N)."""
+        invalidi = [c for c in value if c not in ALLOWED_SHIFT_CODES]
+        if invalidi:
+            raise ValueError(
+                f"Codici turno non ammessi {invalidi}; ammessi: {sorted(ALLOWED_SHIFT_CODES)}."
+            )
+        return value
+
+
+# ===========================================================================
+# VINCOLI SOFT DEL SINGOLO LAVORATORE (PREFERENZE + SODDISFAZIONE)
+# ===========================================================================
+class WorkerSoftConstraints(BaseModel):
+    """
+    Vincoli SOFT (preferenze) di un lavoratore e relativo modello di
+    soddisfazione. Non sono obbligatori: guidano la funzione obiettivo che
+    massimizza la soddisfazione complessiva.
+    """
+
     turni_preferiti: List[str] = Field(
         default_factory=list,
         description="Codici turno graditi, ordinati dal piu' gradito.",
     )
     turni_indesiderati: List[str] = Field(
         default_factory=list,
-        description="Codici turno sgraditi.",
+        description="Codici turno sgraditi (ma non vietati).",
     )
-    giorni_indisponibilita: List[str] = Field(
+    giorni_indesiderati: List[str] = Field(
         default_factory=list,
-        description="Date ISO 'YYYY-MM-DD' in cui il lavoratore NON puo' lavorare.",
+        description=(
+            "Date ISO 'YYYY-MM-DD' che il lavoratore preferirebbe NON lavorare "
+            "(richieste di ferie). Non sono un divieto: subiscono una penalita' "
+            "alta nella funzione obiettivo, ma in emergenza restano assegnabili."
+        ),
     )
     flexibility_score: float = Field(
         ...,
         ge=0.0,
         le=1.0,
-        description="Tolleranza ai turni indesiderati, tra 0.0 (rigido) e 1.0 (flessibile).",
+        description=(
+            "Tolleranza ai turni indesiderati, tra 0.0 (rigido) e 1.0 (flessibile). "
+            "E' la categoria soft 'Individual tolerance levels' del progetto. Per "
+            "DESIGN non entra come parametro separato nel modello OR-Tools (sarebbe "
+            "un doppio conteggio): la tolleranza e' gia' incorporata nella grandezza "
+            "dei satisfaction_weights negativi, che la Fase 1 fissa in funzione di "
+            "questo score (~ -6*(1-flexibility_score) per un turno indesiderato)."
+        ),
     )
     satisfaction_weights: Dict[str, float] = Field(
         ...,
-        description="Peso numerico di soddisfazione per ciascun codice turno.",
+        description="Modello di soddisfazione: peso numerico per ciascun codice turno.",
     )
 
     @field_validator("turni_preferiti", "turni_indesiderati")
@@ -59,6 +124,19 @@ class WorkerPreference(BaseModel):
             raise ValueError(
                 f"Codici turno non ammessi {invalidi}; ammessi: {sorted(ALLOWED_SHIFT_CODES)}."
             )
+        return value
+
+    @field_validator("giorni_indesiderati")
+    @classmethod
+    def _check_iso_dates(cls, value: List[str]) -> List[str]:
+        """I giorni indesiderati devono essere date ISO valide 'YYYY-MM-DD'."""
+        for d in value:
+            try:
+                date.fromisoformat(d)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"Giorno indesiderato '{d}' non valido: usa il formato ISO 'YYYY-MM-DD'."
+                )
         return value
 
     @field_validator("satisfaction_weights")
@@ -81,7 +159,7 @@ class WorkerPreference(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _check_coherence(self) -> "WorkerPreference":
+    def _check_coherence(self) -> "WorkerSoftConstraints":
         """
         Coerenza tra preferenze e pesi:
             - un turno preferito deve avere peso positivo;
@@ -99,6 +177,45 @@ class WorkerPreference(BaseModel):
                     f"Il turno indesiderato '{code}' deve avere un satisfaction_weight "
                     f"negativo (trovato {self.satisfaction_weights.get(code)})."
                 )
+        return self
+
+
+# ===========================================================================
+# PREFERENZE COMPLETE DI UN LAVORATORE (HARD + SOFT)
+# ===========================================================================
+class WorkerPreference(BaseModel):
+    """
+    Preferenze formalizzate di un singolo lavoratore, con distinzione esplicita
+    tra vincoli hard (inderogabili) e soft (preferenze).
+    """
+
+    nome: str = Field(..., description="Nome completo del lavoratore.")
+    hard_constraints: WorkerHardConstraints = Field(
+        ..., description="Vincoli HARD specifici del lavoratore."
+    )
+    soft_constraints: WorkerSoftConstraints = Field(
+        ..., description="Vincoli SOFT (preferenze) e modello di soddisfazione."
+    )
+
+    @model_validator(mode="after")
+    def _check_hard_soft_separation(self) -> "WorkerPreference":
+        """
+        Un turno vietato (hard) non puo' comparire tra le preferenze soft:
+        sarebbe una contraddizione (e' assolutamente escluso, non solo sgradito).
+        """
+        vietati = set(self.hard_constraints.turni_vietati)
+        in_preferiti = vietati & set(self.soft_constraints.turni_preferiti)
+        if in_preferiti:
+            raise ValueError(
+                f"I turni vietati {sorted(in_preferiti)} non possono essere anche "
+                f"'turni_preferiti' (contraddizione hard/soft)."
+            )
+        in_indesiderati = vietati & set(self.soft_constraints.turni_indesiderati)
+        if in_indesiderati:
+            raise ValueError(
+                f"I turni vietati {sorted(in_indesiderati)} sono gia' un vincolo HARD: "
+                f"non vanno ripetuti tra i 'turni_indesiderati' soft."
+            )
         return self
 
 

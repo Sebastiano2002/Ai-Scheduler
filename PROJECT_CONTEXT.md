@@ -8,8 +8,9 @@ Il sistema deve generare orari bilanciati che rispettino rigorosamente i requisi
 
 ## Fase 0: Setup dell'Infrastruttura (Esecuzione Sicura e Orchestrazione)
 * **Obiettivo:** Costruire una base Python robusta per l'interazione con l'LLM e l'esecuzione del codice.
+* **Backend LLM:** Inferenza remota tramite **Google Gemini 2.5 Flash** (`google-genai`, `google.genai.Client`). Prerequisito: impostare la variabile d'ambiente `GEMINI_API_KEY` ottenibile da [Google AI Studio](https://aistudio.google.com/app/apikey).
 * **Attività:**
-  - Creare la classe `AgentExecutor` per gestire le chiamate API (usando LangChain/LangGraph).
+  - Creare la classe `AgentExecutor` per gestire l'interazione con Google Gemini 2.5 Flash (usando `google-genai`).
   - Implementare una funzione `safe_execute(code_str)`:
     - Utilizzare `exec()` all'interno di un robusto blocco `try...except` per eseguire il codice OR-Tools generato.
     - Se OR-Tools fallisce (errore di sintassi o di logica), catturare lo stack trace dell'errore.
@@ -42,7 +43,7 @@ Il sistema deve generare orari bilanciati che rispettino rigorosamente i requisi
 
 * **Implementazione degli Use Case (Totale 13 Lavoratori):**
   - **Use Case A (Lavoratori Omogenei):** 13 lavoratori totali (tutti con lo stesso ruolo). Almeno 2 lavoratori assegnati a ogni turno.
-  - **Use Case B (Lavoratori Specializzati):** 13 lavoratori totali (es. 10 standard, 3 specializzati). Minimo 2 standard + 1 specializzato per turno. Gli specializzati possono coprire i ruoli standard se necessario.
+  - **Use Case B (Lavoratori Specializzati):** 20 lavoratori totali (es. 13 standard, 7 specializzati). Minimo 2 standard + 1 specializzato per turno. Gli specializzati possono coprire i ruoli standard se necessario.
 
 ---
 
@@ -66,4 +67,4 @@ Il sistema deve generare orari bilanciati che rispettino rigorosamente i requisi
 ## 5. Checklist di Consegna (Deliverables)
 - [ ] **Codice Sorgente:** Un file `.zip` contenente il framework Python completamente implementato.
 - [ ] **Output di Esempio:** Il modello `cp_model` parziale generato dall'LLM e la schedulazione finale risultante (es. in formato CSV o in visualizzazione Pandas DataFrame).
-- [ ] **Breve Relazione (Report):** Documento che descrive l'approccio utilizzato, le scelte di design (come l'architettura Multi-Agente basata su LangChain/LangGraph) e una discussione sulla qualità e sull'equità dei risultati ottenuti per gli Use Case A e B.
+- [ ] **Breve Relazione (Report):** Documento che descrive l'approccio utilizzato, le scelte di design (come l'architettura Multi-Agente basata su Google Gemini 2.5 Flash e google-genai) e una discussione sulla qualità e sull'equità dei risultati ottenuti per gli Use Case A e B.
