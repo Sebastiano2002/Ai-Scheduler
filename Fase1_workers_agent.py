@@ -349,12 +349,23 @@ def formalize_case(executor, case_label, preferences_text):
 # MAIN: esegue la formalizzazione per ENTRAMBI gli use case
 # ---------------------------------------------------------------------------
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="SmartScheduler Fase 1 - Workers Agent."
+    )
+    parser.add_argument(
+        "--case", choices=["A", "B", "all"], default="all",
+        help="Use case da eseguire (default: all).",
+    )
+    args = parser.parse_args()
+
     # L'inferenza avviene via Google Gemini 2.5 Flash: richiede GEMINI_API_KEY.
     preferences_text = load_preferences_text()
     executor = AgentExecutor()
 
+    casi = ["A", "B"] if args.case == "all" else [args.case]
     risultati = {}
-    for case_label in ("A", "B"):
+    for case_label in casi:
         risultati[case_label] = formalize_case(executor, case_label, preferences_text)
 
     print(f"\n{'='*64}")
@@ -363,7 +374,6 @@ def main():
     for case_label, out_path in risultati.items():
         stato = out_path if out_path else "FALLITO"
         print(f"  Use Case {case_label}: {stato}")
-
 
 if __name__ == "__main__":
     main()

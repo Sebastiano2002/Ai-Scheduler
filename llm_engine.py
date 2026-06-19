@@ -20,6 +20,12 @@ import re
 import time
 import traceback
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from google import genai
 from google.genai import types
 
