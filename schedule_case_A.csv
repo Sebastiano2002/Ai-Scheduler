@@ -1,14 +1,14 @@
 worker_id,nome,2026-12-07,2026-12-08,2026-12-09,2026-12-10,2026-12-11,2026-12-12,2026-12-13,2026-12-14,2026-12-15,2026-12-16,2026-12-17,2026-12-18,2026-12-19,2026-12-20,2026-12-21,2026-12-22,2026-12-23,2026-12-24,2026-12-25,2026-12-26,2026-12-27,2026-12-28,2026-12-29,2026-12-30,2026-12-31,2027-01-01,2027-01-02,2027-01-03,2027-01-04,2027-01-05,2027-01-06,tot_turni_pesati,soddisfazione
-W01,Marco Rossi,M,M,N,-,-,M,M,M,M,N,-,-,M,M,M,-,M,N,-,-,N,-,-,M,M,M,M,N,-,-,M,25,66.0
-W02,Giulia Bianchi,M,M,M,M,M,M,-,M,M,M,-,M,N,-,-,M,N,-,-,-,M,M,M,M,N,-,-,M,M,M,M,25,114.0
-W03,Luca Ferrari,N,-,-,P,N,-,-,N,-,-,P,P,N,-,-,N,-,-,N,-,-,P,P,N,-,-,P,P,P,P,N,25,40.0
-W04,Sara Russo,-,P,P,P,P,-,N,-,-,P,P,P,P,N,-,-,P,P,P,P,-,P,P,P,-,-,P,P,P,P,N,25,78.8
-W05,Andrea Esposito,P,P,P,P,N,-,-,P,P,P,-,N,-,-,N,-,-,P,P,N,-,-,N,-,-,P,N,-,-,P,N,25,11.0
-W06,Chiara Romano,M,-,M,M,M,-,N,-,-,M,M,M,M,N,-,-,M,M,M,M,N,-,-,M,M,M,M,N,-,-,P,25,63.2
-W07,Matteo Colombo,P,N,-,-,P,N,-,-,N,-,-,N,-,-,P,P,P,-,P,N,-,-,P,N,-,-,P,P,P,P,N,25,61.0
-W08,Francesca Ricci,-,M,M,M,M,M,-,M,M,M,M,M,M,-,M,M,-,M,M,-,M,M,M,M,M,-,M,M,M,M,P,25,124.0
-W09,Davide Greco,M,M,M,N,-,-,M,M,M,M,N,-,-,M,M,-,M,M,N,-,-,N,-,-,N,-,-,M,M,N,-,25,57.0
+W01,Marco Rossi,M,M,M,N,-,-,M,M,M,M,N,-,-,M,M,M,M,N,-,-,M,M,-,M,M,N,-,-,N,-,-,25,63.0
+W02,Giulia Bianchi,M,N,-,-,M,M,M,M,N,-,-,-,M,M,M,M,N,-,-,-,M,M,M,M,N,-,-,M,M,M,M,25,102.0
+W03,Luca Ferrari,N,-,-,N,-,-,N,-,-,P,P,N,-,-,P,P,P,-,P,N,-,-,P,N,-,-,P,P,P,P,N,25,35.0
+W04,Sara Russo,N,-,-,P,P,P,P,N,-,-,P,P,P,P,N,-,-,P,P,P,P,N,-,-,-,-,P,P,P,P,P,25,63.4
+W05,Andrea Esposito,P,-,P,P,P,P,-,N,-,-,P,P,N,-,-,N,-,-,P,P,N,-,-,N,-,-,P,P,P,P,N,25,13.0
+W06,Chiara Romano,M,-,-,M,M,M,N,-,-,M,M,M,M,N,-,-,M,M,M,M,N,-,-,M,M,M,M,N,-,-,M,25,65.8
+W07,Matteo Colombo,P,P,N,-,-,P,P,P,P,N,-,-,-,P,N,-,-,P,N,-,-,P,N,-,-,P,N,-,-,P,N,25,29.0
+W08,Francesca Ricci,M,M,-,M,M,M,-,M,M,M,M,M,M,-,M,M,M,M,M,-,M,M,-,P,P,P,M,M,-,M,M,25,122.0
+W09,Davide Greco,M,M,M,M,N,-,-,M,M,M,-,M,N,-,-,M,M,M,M,N,-,-,M,-,M,M,N,-,-,N,-,25,60.0
 W10,Elena Marino,P,P,N,-,-,P,P,P,P,N,-,-,P,P,P,P,N,-,-,-,P,N,-,-,P,N,-,-,P,N,-,25,89.0
-W11,Alessandro Conti,M,M,M,N,-,-,M,M,M,M,N,-,-,M,M,M,M,N,-,-,M,M,M,-,M,N,-,-,N,-,-,25,63.0
-W12,Valentina Bruno,P,N,-,-,P,N,-,-,N,-,-,P,M,P,P,N,-,-,P,M,P,-,N,-,-,P,N,-,-,M,N,25,7.0
-W13,Simone Gallo,N,-,-,P,P,P,P,N,-,-,P,P,P,P,N,-,-,P,P,P,P,P,-,P,P,-,P,P,N,-,-,25,65.8
+W11,Alessandro Conti,M,M,M,M,-,N,-,-,M,M,N,-,-,N,-,-,M,N,-,-,M,M,M,M,N,-,-,M,M,M,P,25,52.0
+W12,Valentina Bruno,P,N,-,-,P,N,-,-,N,-,-,P,P,P,P,N,-,-,P,M,M,P,N,-,-,M,-,N,-,-,N,25,7.0
+W13,Simone Gallo,P,P,P,P,N,-,-,P,P,P,P,N,-,-,P,P,P,P,N,-,-,P,P,P,P,-,-,P,N,-,-,25,65.8

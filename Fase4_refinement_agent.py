@@ -168,10 +168,10 @@ for w, floor in LOCKED_FLOORS.items():
 z = model.NewIntVar(-100000, 100000, 'z_min')
 for w in FREE_WORKERS:
     model.Add(z <= sat[w])
-# Tie-breaker debole: a parita' di minimo, massimizza anche la somma (cosi' il
-# margine in eccesso non viene sprecato). Il peso BIG rende l'ordine lessicografico
-# (prima il minimo, poi la somma).
-BIG = 100000
+# Tie-breaker (Trade-off Equita'/Efficienza): bilancia quanto siamo disposti a
+# sacrificare della somma totale per sollevare il minimo. Con BIG=15, sollevare
+# il minimo di 1 punto vale quanto 15 punti tolti al resto del gruppo.
+BIG = 15
 model.Maximize(z * BIG + sum(sat[w] for w in WORKER_IDS))
 
 solver = cp_model.CpSolver()
@@ -444,36 +444,46 @@ def run_refinement_loop(
         sat_scaled = {w: _scaled_satisfaction(candidate, w) for w in worker_ids}
         z_star = min(sat_scaled[w] for w in free)
 
-        # Niente progresso: il minimo dei liberi non supera l'ultimo pavimento.
-        if last_floor_scaled is not None and z_star <= last_floor_scaled:
-            print(f"[~] Il minimo dei liberi ({z_star / SATISFACTION_SCALE}) non "
-                  f"supera il pavimento precedente: nessun ulteriore miglioramento.")
-            steps.append(RefinementStep(
-                it, "NO_IMPROVEMENT", solver_status,
-                last_floor_scaled / SATISFACTION_SCALE,
-                worst_after=z_star / SATISFACTION_SCALE,
-                detail="Minimo dei liberi non migliorato."))
-            break
-
-        binding = sorted(w for w in free if sat_scaled[w] == z_star)
-
-        # Il leximin e' monotono: questa schedule domina la precedente (i fissati
-        # restano sopra il loro pavimento, i liberi sono saliti) -> nuovo riferimento.
+        # Il nuovo candidato e' matematicamente migliore o uguale al warm-start,
+        # quindi aggiorniamo sempre il riferimento corrente.
         best_result = candidate
         best_report = candidate_report
         current_assign = _assign_from_result(data, candidate)
-        for w in binding:
-            locked_floors[w] = z_star
-            free.remove(w)
-        last_floor_scaled = z_star
 
-        print(f"[OK] Minimo dei liberi sollevato a {z_star / SATISFACTION_SCALE}; "
-              f"fissati a questo livello: {', '.join(binding)}.")
-        steps.append(RefinementStep(
-            it, "ACCEPTED", solver_status,
-            worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
-            detail=f"Livello leximin: bloccati {', '.join(binding)} "
-                   f"a {z_star / SATISFACTION_SCALE}."))
+        # Blocchiamo il livello SOLO se il solutore ha certificato l'ottimalita'
+        if "OPTIMAL" in solver_status:
+            # Niente progresso: il minimo dei liberi non supera l'ultimo pavimento.
+            if last_floor_scaled is not None and z_star <= last_floor_scaled:
+                print(f"[~] Il minimo dei liberi ({z_star / SATISFACTION_SCALE}) non "
+                      f"supera il pavimento precedente (OPTIMAL): nessun ulteriore miglioramento.")
+                steps.append(RefinementStep(
+                    it, "NO_IMPROVEMENT", solver_status,
+                    last_floor_scaled / SATISFACTION_SCALE,
+                    worst_after=z_star / SATISFACTION_SCALE,
+                    detail="Minimo dei liberi non migliorato."))
+                break
+
+            binding = sorted(w for w in free if sat_scaled[w] == z_star)
+            for w in binding:
+                locked_floors[w] = z_star
+                free.remove(w)
+            last_floor_scaled = z_star
+
+            print(f"[OK] OPTIMAL certificato. Minimo dei liberi confermato a {z_star / SATISFACTION_SCALE}; "
+                  f"fissati a questo livello: {', '.join(binding)}.")
+            steps.append(RefinementStep(
+                it, "ACCEPTED_OPTIMAL", solver_status,
+                worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
+                detail=f"Livello bloccato: {', '.join(binding)} a {z_star / SATISFACTION_SCALE}."))
+        else:
+            # Soluzione FEASIBLE: migliorata ma non possiamo garantire che sia il tetto massimo.
+            # NON blocchiamo e procediamo all'iterazione successiva con il nuovo warm-start.
+            print(f"[*] Avanzamento parziale (FEASIBLE). Minimo provvisorio a {z_star / SATISFACTION_SCALE}. "
+                  f"Nessun lavoratore bloccato, proseguo la ricerca...")
+            steps.append(RefinementStep(
+                it, "ACCEPTED_FEASIBLE", solver_status,
+                worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
+                detail=f"Avanzamento parziale, minimo a {z_star / SATISFACTION_SCALE}."))
 
     final_sat = dict(best_result.satisfaction_per_worker)
     # "improved" in senso leximin: il vettore ordinato in modo crescente e'

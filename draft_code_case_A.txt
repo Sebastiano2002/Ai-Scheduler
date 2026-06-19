@@ -15,7 +15,7 @@ def build_model():
 
     # Vincolo 3: Max 36 ore settimanali e almeno 1 giorno di riposo a settimana
     for w in WORKER_IDS:
-        for t in range(NUM_DAYS - 6):  # finestre di 7 giorni: t, t+1, ..., t+6
+        for t in range(NUM_DAYS - 6):
             finestra = range(t, t + 7)
             model.Add(sum(SHIFT_HOURS[s] * x[(w, d, s)]
                           for d in finestra for s in SHIFT_CODES) <= 36)
@@ -30,7 +30,7 @@ def build_model():
     # Vincolo 5: Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE
     for w in WORKER_IDS:
         for d in range(NUM_DAYS):
-            for k in range(1, 3):  # k=1 e k=2 (i due giorni di riposo)
+            for k in range(1, 3):
                 if d + k < NUM_DAYS:
                     for s in SHIFT_CODES:
                         model.Add(x[(w, d, 'N')] + x[(w, d + k, s)] <= 1)
@@ -70,8 +70,8 @@ model, x = build_model()
 if warm is not None:
     for key, var in x.items():
         model.AddHint(var, warm[key])
-
 obiettivo = []
+
 # (a) Soddisfazione + penalita' per i GIORNI INDESIDERATI (ferie).
 for w in WORKER_IDS:
     for d in range(NUM_DAYS):
