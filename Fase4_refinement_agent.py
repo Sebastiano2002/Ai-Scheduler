@@ -158,7 +158,7 @@ for w in WORKER_IDS:
             if d in UNDESIRED_DAYS[w]:
                 peso -= int(round(UNDESIRED_DAY_PENALTY * SATISFACTION_SCALE))
             terms.append(peso * x[(w, d, s)])
-    sat[w] = sum(terms)
+    sat[w] = cp_model.LinearExpr.sum(terms)
 
 # Pavimenti HARD dei lavoratori gia' fissati ai livelli precedenti (leximin).
 for w, floor in LOCKED_FLOORS.items():
@@ -172,7 +172,7 @@ for w in FREE_WORKERS:
 # sacrificare della somma totale per sollevare il minimo. Con BIG=15, sollevare
 # il minimo di 1 punto vale quanto 15 punti tolti al resto del gruppo.
 BIG = 15
-model.Maximize(z * BIG + sum(sat[w] for w in WORKER_IDS))
+model.Maximize(z * BIG + cp_model.LinearExpr.sum(sat[w] for w in WORKER_IDS))
 
 solver = cp_model.CpSolver()
 solver.parameters.max_time_in_seconds = MAX_TIME
