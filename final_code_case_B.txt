@@ -1,33 +1,42 @@
+from ortools.sat.python import cp_model
+
 def build_model():
     model = cp_model.CpModel()
     x = {(w, d, s): model.NewBoolVar(f"x_{w}_{d}_{s}")
           for w in WORKER_IDS for d in range(NUM_DAYS) for s in SHIFT_CODES}
 
-    # Vincolo 1: Max 36 ore settimanali per lavoratore e Max 6 turni settimanali
+    # Vincolo 1: Max 1 turno al giorno
+    for w in WORKER_IDS:
+        for d in range(NUM_DAYS):
+            model.AddAtMostOne(x[(w, d, s)] for s in SHIFT_CODES)
+
+    # Vincolo 2: Turni vietati
+    for w in WORKER_IDS:
+        for s in FORBIDDEN_SHIFTS[w]:
+            for d in range(NUM_DAYS):
+                model.Add(x[(w, d, s)] == 0)
+
+    # Vincolo 3: ESATTAMENTE 25 turni/mese per lavoratore (pesati)
+    for w in WORKER_IDS:
+        model.Add(sum(SHIFT_WEIGHT[s] * x[(w, d, s)]
+                      for d in range(NUM_DAYS) for s in SHIFT_CODES) == 25)
+
+    # Vincolo 4: Max 36 ore settimanali per lavoratore
     for w in WORKER_IDS:
         for t in range(NUM_DAYS - 6):
             finestra = range(t, t + 7)
             model.Add(sum(SHIFT_HOURS[s] * x[(w, d, s)]
                           for d in finestra for s in SHIFT_CODES) <= 36)
+            # Vincolo 6: Almeno 1 giorno di riposo a settimana (<=6 lavorati)
             model.Add(sum(x[(w, d, s)]
                           for d in finestra for s in SHIFT_CODES) <= 6)
 
-    # Vincolo 2: ESATTAMENTE 25 turni/mese per lavoratore (pesati)
-    for w in WORKER_IDS:
-        model.Add(sum(SHIFT_WEIGHT[s] * x[(w, d, s)]
-                      for d in range(NUM_DAYS) for s in SHIFT_CODES) == 25)
-
-    # Vincolo 3a: Max 1 turno al giorno per lavoratore
-    for w in WORKER_IDS:
-        for d in range(NUM_DAYS):
-            model.Add(sum(x[(w, d, s)] for s in SHIFT_CODES) <= 1)
-
-    # Vincolo 3b: Divieto Notte(d)->Mattina(d+1)
+    # Vincolo 5: Divieto Notte(d)->Mattina(d+1)
     for w in WORKER_IDS:
         for d in range(NUM_DAYS - 1):
             model.Add(x[(w, d, 'N')] + x[(w, d + 1, 'M')] <= 1)
 
-    # Vincolo 5: Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE
+    # Vincolo 7: Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE
     for w in WORKER_IDS:
         for d in range(NUM_DAYS):
             for k in range(1, 3):
@@ -35,16 +44,13 @@ def build_model():
                     for s in SHIFT_CODES:
                         model.Add(x[(w, d, 'N')] + x[(w, d + k, s)] <= 1)
 
-    # Vincolo: Turni vietati per lavoratore
-    for w in WORKER_IDS:
-        for s in FORBIDDEN_SHIFTS[w]:
-            for d in range(NUM_DAYS):
-                model.Add(x[(w, d, s)] == 0)
-
-    # Vincolo: Staffing (Caso A: almeno 2 lavoratori assegnati a OGNI turno di OGNI giorno)
+    # Vincolo 8 (Caso B): Staffing requirements
     for d in range(NUM_DAYS):
         for s in SHIFT_CODES:
-            model.Add(sum(x[(w, d, s)] for w in WORKER_IDS) >= 2)
+            # Almeno 1 lavoratore specializzato per turno
+            model.Add(sum(x[(w, d, s)] for w in SPECIALIZED_IDS) >= 1)
+            # Almeno 3 lavoratori totali per turno
+            model.Add(sum(x[(w, d, s)] for w in WORKER_IDS) >= 3)
 
     return model, x
 

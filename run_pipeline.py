@@ -87,8 +87,12 @@ def run_phase_2_and_3(executor, data, max_time, max_draft_attempts):
               f"(tentativo {attempt}/{max_draft_attempts})")
         print(f"{'#'*64}")
 
+        current_max_time = max_time * (2 ** (attempt - 1))
+        if attempt > 1:
+            print(f"[*] Aumento il tempo massimo del solutore a {current_max_time} secondi (Backoff Esponenziale).")
+
         result = run_llm_drafting(
-            executor, data, max_time=max_time, feedback=feedback
+            executor, data, max_time=current_max_time, feedback=feedback
         )
         if result is None:
             print("[!] Il Drafting Agent non ha prodotto codice eseguibile. "
