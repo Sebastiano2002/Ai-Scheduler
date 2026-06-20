@@ -570,7 +570,7 @@ def save_generated_code(case_label: str, code: str, path: Optional[str] = None) 
 def run_llm_drafting(
     executor,
     data: ProblemData,
-    max_time: float = 30.0,
+    max_time: float = 60.0,
     max_retries: int = 3,
     feedback: Optional[str] = None,
 ) -> Optional[ScheduleResult]:
@@ -704,7 +704,7 @@ def print_summary(data: ProblemData, result: ScheduleResult) -> None:
 # ===========================================================================
 # 4. MAIN / CLI
 # ===========================================================================
-def run_case(case_label: str, max_time: float = 30.0) -> Optional[ScheduleResult]:
+def run_case(case_label: str, max_time: float = 60.0) -> Optional[ScheduleResult]:
     """Esegue la Fase 2 (percorso LLM) per un singolo use case."""
     data = load_problem_data(case_label)
 
@@ -742,8 +742,8 @@ def main():
         help="Use case da risolvere (default: all).",
     )
     parser.add_argument(
-        "--max-time", type=float, default=30.0,
-        help="Tempo massimo di risoluzione del solver in secondi (default: 30).",
+        "--max-time", type=float, default=60.0,
+        help="Tempo massimo di risoluzione del solver in secondi (default: 60).",
     )
     args = parser.parse_args()
 

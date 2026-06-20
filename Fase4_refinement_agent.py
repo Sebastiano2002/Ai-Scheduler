@@ -355,6 +355,8 @@ def run_refinement_loop(
     free = list(worker_ids)                          # lavoratori ancora da ottimizzare
     current_assign = _assign_from_result(data, initial_result)  # warm-start corrente
     last_floor_scaled = None                         # pavimento del livello precedente
+    current_max_time = max_time                      # timer dinamico
+    last_objective_score = None                      # tracking stallo (z_star, total_sum)
 
     steps: List[RefinementStep] = []
 
@@ -371,7 +373,7 @@ def run_refinement_loop(
             break
 
         context_vars = _build_refinement_context(
-            data, max_time, locked_floors, free, current_assign
+            data, current_max_time, locked_floors, free, current_assign
         )
 
         print(f"\n{'-'*64}")
@@ -443,6 +445,8 @@ def run_refinement_loop(
         # --- BOOKKEEPING LEXIMIN: minimo raggiunto tra i liberi + fissaggio ---
         sat_scaled = {w: _scaled_satisfaction(candidate, w) for w in worker_ids}
         z_star = min(sat_scaled[w] for w in free)
+        total_sum = sum(sat_scaled.values())
+        current_score = (z_star, total_sum)
 
         # Il nuovo candidato e' matematicamente migliore o uguale al warm-start,
         # quindi aggiorniamo sempre il riferimento corrente.
@@ -450,12 +454,40 @@ def run_refinement_loop(
         best_report = candidate_report
         current_assign = _assign_from_result(data, candidate)
 
-        # Blocchiamo il livello SOLO se il solutore ha certificato l'ottimalita'
-        if "OPTIMAL" in solver_status:
+        is_optimal = ("OPTIMAL" in solver_status)
+        is_stuck = ("FEASIBLE" in solver_status and last_objective_score is not None and current_score == last_objective_score)
+
+        if is_stuck:
+            if current_max_time <= max_time:
+                # Tentativo profondo
+                current_max_time = max_time * 2
+                print(f"[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a {current_max_time}s per un 'Deep Dive'.")
+                steps.append(RefinementStep(
+                    it, "STUCK_DOUBLING_TIME", solver_status,
+                    worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
+                    detail=f"Nessun progresso. Deep dive {current_max_time}s nel prossimo ciclo."))
+                last_objective_score = current_score
+                continue
+            else:
+                # Impantanato anche col deep dive
+                print(f"[X] Impantanato anche dopo il Deep Dive ({current_max_time}s). Forzo il blocco del livello come se fosse OPTIMAL.")
+                is_optimal = True
+                steps.append(RefinementStep(
+                    it, "FORCED_OPTIMAL", solver_status,
+                    worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
+                    detail=f"Resa (Early Stop) dopo Deep Dive {current_max_time}s."))
+
+        # Se ci siamo sbloccati o abbiamo migliorato senza esserci arenati prima
+        if current_score != last_objective_score and not is_optimal:
+            current_max_time = max_time # reset timer if it was doubled
+            last_objective_score = current_score
+
+        # Blocchiamo il livello SOLO se il solutore ha certificato l'ottimalita' (o forzato)
+        if is_optimal:
             # Niente progresso: il minimo dei liberi non supera l'ultimo pavimento.
             if last_floor_scaled is not None and z_star <= last_floor_scaled:
                 print(f"[~] Il minimo dei liberi ({z_star / SATISFACTION_SCALE}) non "
-                      f"supera il pavimento precedente (OPTIMAL): nessun ulteriore miglioramento.")
+                      f"supera il pavimento precedente (OPTIMAL o Forzato): nessun ulteriore miglioramento.")
                 steps.append(RefinementStep(
                     it, "NO_IMPROVEMENT", solver_status,
                     last_floor_scaled / SATISFACTION_SCALE,
@@ -467,14 +499,18 @@ def run_refinement_loop(
             for w in binding:
                 locked_floors[w] = z_star
                 free.remove(w)
+            
             last_floor_scaled = z_star
+            last_objective_score = None # Reset tracking for the new level
+            current_max_time = max_time
 
-            print(f"[OK] OPTIMAL certificato. Minimo dei liberi confermato a {z_star / SATISFACTION_SCALE}; "
+            print(f"[OK] Livello bloccato. Minimo dei liberi confermato a {z_star / SATISFACTION_SCALE}; "
                   f"fissati a questo livello: {', '.join(binding)}.")
-            steps.append(RefinementStep(
-                it, "ACCEPTED_OPTIMAL", solver_status,
-                worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
-                detail=f"Livello bloccato: {', '.join(binding)} a {z_star / SATISFACTION_SCALE}."))
+            if "OPTIMAL" in solver_status:
+                steps.append(RefinementStep(
+                    it, "ACCEPTED_OPTIMAL", solver_status,
+                    worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
+                    detail=f"Livello bloccato: {', '.join(binding)} a {z_star / SATISFACTION_SCALE}."))
         else:
             # Soluzione FEASIBLE: migliorata ma non possiamo garantire che sia il tetto massimo.
             # NON blocchiamo e procediamo all'iterazione successiva con il nuovo warm-start.
