@@ -15,7 +15,7 @@ def build_model():
 
     # Vincolo 3: Max 36 ore settimanali e almeno 1 giorno di riposo a settimana
     for w in WORKER_IDS:
-        for t in range(NUM_DAYS - 6):  # finestre di 7 giorni: t, t+1, ..., t+6
+        for t in range(NUM_DAYS - 6):
             finestra = range(t, t + 7)
             model.Add(sum(SHIFT_HOURS[s] * x[(w, d, s)]
                           for d in finestra for s in SHIFT_CODES) <= 36)
@@ -30,7 +30,7 @@ def build_model():
     # Vincolo 5: Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE
     for w in WORKER_IDS:
         for d in range(NUM_DAYS):
-            for k in range(1, 3):  # k=1 e k=2 (i due giorni di riposo)
+            for k in range(1, 3):
                 if d + k < NUM_DAYS:
                     for s in SHIFT_CODES:
                         model.Add(x[(w, d, 'N')] + x[(w, d + k, s)] <= 1)
@@ -77,10 +77,10 @@ for w, floor in LOCKED_FLOORS.items():
 z = model.NewIntVar(-100000, 100000, 'z_min')
 for w in FREE_WORKERS:
     model.Add(z <= sat[w])
-# Tie-breaker debole: a parita' di minimo, massimizza anche la somma (cosi' il
-# margine in eccesso non viene sprecato). Il peso BIG rende l'ordine lessicografico
-# (prima il minimo, poi la somma).
-BIG = 100000
+# Tie-breaker (Trade-off Equita'/Efficienza): bilancia quanto siamo disposti a
+# sacrificare della somma totale per sollevare il minimo. Con BIG=15, sollevare
+# il minimo di 1 punto vale quanto 15 punti tolti al resto del gruppo.
+BIG = 15
 model.Maximize(z * BIG + sum(sat[w] for w in WORKER_IDS))
 
 solver = cp_model.CpSolver()
