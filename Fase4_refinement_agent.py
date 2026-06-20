@@ -48,10 +48,12 @@ from Fase2_drafting_agent import (
     SATISFACTION_SCALE,
     _build_llm_context,
     build_schedule_result,
+    compute_sat_max,
     export_csv,
     load_problem_data,
     run_llm_drafting,
     save_generated_code,
+    worker_satisfaction_pct,
 )
 from Fase3_verification_agent import (
     VerificationReport,
@@ -59,6 +61,13 @@ from Fase3_verification_agent import (
     print_report,
     verify_schedule,
 )
+
+# Risoluzione della scala NORMALIZZATA usata dal leximin: la soddisfazione
+# normalizzata norm(w)=sat(w)/sat_max(w) e' rappresentata come intero z ~
+# norm*NORM_SCALE (100 = 100%, risoluzione 1%). Permette di scrivere il vincolo
+# max-min in forma LINEARE intera: z*SAT_MAX_SCALED[w] <= sat(w)*NORM_SCALE,
+# mantenendo i coefficienti del modello CP contenuti.
+NORM_SCALE = 100
 
 
 # ===========================================================================
@@ -108,9 +117,14 @@ def build_refinement_prompt(
 dell'equita' secondo il criterio MAX-MIN FAIRNESS / leximin). Hai gia' prodotto
 una bozza VALIDA per lo USE CASE {data.case_label} (codice di riferimento sotto,
 rispetta tutti i vincoli hard). Ora devi scrivere un modello cp_model che, invece
-di massimizzare la soddisfazione TOTALE, **massimizza il MINIMO** di soddisfazione
-tra i lavoratori: e' questo che solleva il lavoratore piu' svantaggiato (la somma
-utilitaristica, al contrario, lo lascia inchiodato per premiare i gia' soddisfatti).
+di massimizzare la soddisfazione TOTALE, **massimizza il MINIMO della soddisfazione
+NORMALIZZATA** tra i lavoratori. La soddisfazione normalizzata di w e'
+norm(w)=sat(w)/sat_max(w): quanto w e' vicino al PROPRIO massimo individuale. Si
+normalizza perche' i punteggi assoluti NON sono confrontabili tra lavoratori (chi
+predilige la Notte ha un massimo di poche unita', chi predilige Mattina/Pomeriggio
+un massimo molto piu' alto): massimizzare il minimo ASSOLUTO premierebbe la
+grandezza dei pesi, non l'equita' reale. Massimizzare il minimo NORMALIZZATO
+solleva chi e' davvero piu' lontano dal proprio ottimo.
 
 ### CODICE cp_model DI RIFERIMENTO (per i VINCOLI HARD: replicali identici)
 ```python
@@ -125,9 +139,13 @@ utilitaristica, al contrario, lo lascia inchiodato per premiare i gia' soddisfat
 - SATISFACTION_SCALE : int  -> {SATISFACTION_SCALE}
 - UNDESIRED_DAYS     : dict -> {{wid: set(indici_giorno) di ferie}}
 - UNDESIRED_DAY_PENALTY : float -> penalita' per turno in un giorno indesiderato
-- LOCKED_FLOORS : dict -> {{wid: pavimento_scalato_intero}} dei lavoratori GIA'
-  FISSATI ai livelli leximin precedenti (la loro soddisfazione NON deve scendere).
-- FREE_WORKERS  : list -> lavoratori ancora da ottimizzare (di cui massimizzare il minimo).
+- SAT_MAX_SCALED : dict -> {{wid: massimo individuale di soddisfazione SCALATO (intero >=1)}};
+  e' il denominatore della normalizzazione (sat_max(w) del lavoratore w).
+- NORM_SCALE : int -> risoluzione della scala normalizzata ({NORM_SCALE} = 100%).
+- LOCKED_FLOORS : dict -> {{wid: pavimento_normalizzato_intero (in unita' di NORM_SCALE)}}
+  dei lavoratori GIA' FISSATI ai livelli leximin precedenti (la loro soddisfazione
+  normalizzata NON deve scendere sotto il pavimento).
+- FREE_WORKERS  : list -> lavoratori ancora da ottimizzare (di cui massimizzare il minimo NORMALIZZATO).
 - CURRENT_ASSIGN: dict -> {{(wid, giorno, turno): 0/1}} schedule corrente (warm-start).
 
 ### STRUTTURA OBBLIGATORIA DEL MODELLO leximin
@@ -160,19 +178,23 @@ for w in WORKER_IDS:
             terms.append(peso * x[(w, d, s)])
     sat[w] = cp_model.LinearExpr.sum(terms)
 
-# Pavimenti HARD dei lavoratori gia' fissati ai livelli precedenti (leximin).
+# Pavimenti dei lavoratori gia' fissati (leximin), in scala NORMALIZZATA:
+# norm(w) >= floor/NORM_SCALE  <=>  sat[w]*NORM_SCALE >= floor*SAT_MAX_SCALED[w].
 for w, floor in LOCKED_FLOORS.items():
-    model.Add(sat[w] >= floor)
+    model.Add(sat[w] * NORM_SCALE >= floor * SAT_MAX_SCALED[w])
 
-# MAX-MIN: massimizza il minimo di soddisfazione tra i lavoratori LIBERI.
-z = model.NewIntVar(-100000, 100000, 'z_min')
+# MAX-MIN NORMALIZZATO: massimizza il minimo della soddisfazione normalizzata tra
+# i lavoratori LIBERI. z e' in unita' di NORM_SCALE (z=1000 -> 100%). Il vincolo
+# z <= norm(w) = sat[w]/SAT_MAX_SCALED[w] si linearizza moltiplicando in croce
+# (SAT_MAX_SCALED[w] e' una costante positiva):
+z = model.NewIntVar(-100000, 100000, 'z_min_norm')
 for w in FREE_WORKERS:
-    model.Add(z <= sat[w])
-# Tie-breaker (Trade-off Equita'/Efficienza): bilancia quanto siamo disposti a
-# sacrificare della somma totale per sollevare il minimo. Con BIG=15, sollevare
-# il minimo di 1 punto vale quanto 15 punti tolti al resto del gruppo.
-BIG = 15
-model.Maximize(z * BIG + cp_model.LinearExpr.sum(sat[w] for w in WORKER_IDS))
+    model.Add(z * SAT_MAX_SCALED[w] <= sat[w] * NORM_SCALE)
+# Tie-breaker: a parita' di minimo normalizzato, massimizza la soddisfazione
+# assoluta totale. BIG e' grande cosi' che il minimo normalizzato resti l'obiettivo
+# DOMINANTE (1 unita' di z vale piu' di tutta la somma assoluta).
+BIG = 1000000
+model.Maximize(z * BIG + cp_model.LinearExpr.sum([sat[w] for w in WORKER_IDS]))
 
 solver = cp_model.CpSolver()
 solver.parameters.max_time_in_seconds = MAX_TIME
@@ -243,6 +265,12 @@ class RefinementOutcome:
     # solo il minimo assoluto, che puo' essere gia' al suo tetto strutturale).
     initial_satisfaction: Dict[str, float] = field(default_factory=dict)
     final_satisfaction: Dict[str, float] = field(default_factory=dict)
+    # Stessi vettori in versione NORMALIZZATA (% del massimo individuale): sono la
+    # vista corretta per leggere il guadagno di equita' (criterio del leximin).
+    initial_worst_pct: float = 0.0
+    final_worst_pct: float = 0.0
+    initial_satisfaction_pct: Dict[str, float] = field(default_factory=dict)
+    final_satisfaction_pct: Dict[str, float] = field(default_factory=dict)
 
 
 # ===========================================================================
@@ -271,7 +299,19 @@ def _build_refinement_context(
     ctx["LOCKED_FLOORS"] = dict(locked_floors)
     ctx["FREE_WORKERS"] = list(free_workers)
     ctx["CURRENT_ASSIGN"] = current_assign
+    # Scala normalizzata: massimo individuale scalato a intero (>=1) e risoluzione.
+    ctx["SAT_MAX_SCALED"] = _sat_max_scaled(data)
+    ctx["NORM_SCALE"] = NORM_SCALE
     return ctx
+
+
+def _sat_max_scaled(data: ProblemData) -> Dict[str, int]:
+    """Massimo individuale di soddisfazione, scalato a intero (>=1) per il leximin."""
+    sat_max = compute_sat_max(data)
+    return {
+        w: max(int(round(sat_max.get(w, 0.0) * SATISFACTION_SCALE)), 1)
+        for w in data.worker_ids
+    }
 
 
 def _assign_from_result(data: ProblemData, result: ScheduleResult) -> dict:
@@ -345,6 +385,11 @@ def run_refinement_loop(
     worker_ids = list(data.worker_ids)
     initial_sat = dict(initial_result.satisfaction_per_worker)
     initial_worst = initial_report.fairness.worst_satisfaction
+    # Scala normalizzata (proportional fairness): denominatore individuale e
+    # vettore % di partenza. Il leximin ottimizza il MINIMO NORMALIZZATO.
+    sat_max_scaled = _sat_max_scaled(data)
+    initial_worst_pct = initial_report.fairness.worst_pct
+    initial_pct = dict(initial_report.fairness.satisfaction_pct_per_worker)
 
     # Stato di riferimento (migliore schedule valida finora) e stato del leximin.
     best_result = initial_result
@@ -442,9 +487,15 @@ def run_refinement_loop(
                 detail=f"{len(candidate_report.violations)} violazioni hard."))
             break
 
-        # --- BOOKKEEPING LEXIMIN: minimo raggiunto tra i liberi + fissaggio ---
+        # --- BOOKKEEPING LEXIMIN (NORMALIZZATO): minimo % tra i liberi + fissaggio ---
+        # norm_scaled[w] = soddisfazione normalizzata in unita' di NORM_SCALE.
+        # Si usa la divisione INTERA (floor) cosi' il pavimento norm_scaled[w] e'
+        # sempre soddisfatto dal candidato stesso (evita INFEASIBLE da arrotondamento).
         sat_scaled = {w: _scaled_satisfaction(candidate, w) for w in worker_ids}
-        z_star = min(sat_scaled[w] for w in free)
+        norm_scaled = {
+            w: (sat_scaled[w] * NORM_SCALE) // sat_max_scaled[w] for w in worker_ids
+        }
+        z_star = min(norm_scaled[w] for w in free)   # minimo normalizzato (permille)
         total_sum = sum(sat_scaled.values())
         current_score = (z_star, total_sum)
 
@@ -457,6 +508,8 @@ def run_refinement_loop(
         is_optimal = ("OPTIMAL" in solver_status)
         is_stuck = ("FEASIBLE" in solver_status and last_objective_score is not None and current_score == last_objective_score)
 
+        z_star_pct = round(z_star / (NORM_SCALE / 100), 1)   # permille -> percento
+
         if is_stuck:
             if current_max_time <= max_time:
                 # Tentativo profondo
@@ -464,7 +517,7 @@ def run_refinement_loop(
                 print(f"[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a {current_max_time}s per un 'Deep Dive'.")
                 steps.append(RefinementStep(
                     it, "STUCK_DOUBLING_TIME", solver_status,
-                    worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
+                    worst_before=initial_worst_pct, worst_after=z_star_pct,
                     detail=f"Nessun progresso. Deep dive {current_max_time}s nel prossimo ciclo."))
                 last_objective_score = current_score
                 continue
@@ -474,7 +527,7 @@ def run_refinement_loop(
                 is_optimal = True
                 steps.append(RefinementStep(
                     it, "FORCED_OPTIMAL", solver_status,
-                    worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
+                    worst_before=initial_worst_pct, worst_after=z_star_pct,
                     detail=f"Resa (Early Stop) dopo Deep Dive {current_max_time}s."))
 
         # Se ci siamo sbloccati o abbiamo migliorato senza esserci arenati prima
@@ -484,49 +537,49 @@ def run_refinement_loop(
 
         # Blocchiamo il livello SOLO se il solutore ha certificato l'ottimalita' (o forzato)
         if is_optimal:
-            # Niente progresso: il minimo dei liberi non supera l'ultimo pavimento.
+            # Niente progresso: il minimo NORMALIZZATO dei liberi non supera il pavimento.
             if last_floor_scaled is not None and z_star <= last_floor_scaled:
-                print(f"[~] Il minimo dei liberi ({z_star / SATISFACTION_SCALE}) non "
+                print(f"[~] Il minimo normalizzato dei liberi ({z_star_pct}%) non "
                       f"supera il pavimento precedente (OPTIMAL o Forzato): nessun ulteriore miglioramento.")
                 steps.append(RefinementStep(
                     it, "NO_IMPROVEMENT", solver_status,
-                    last_floor_scaled / SATISFACTION_SCALE,
-                    worst_after=z_star / SATISFACTION_SCALE,
-                    detail="Minimo dei liberi non migliorato."))
+                    round(last_floor_scaled / (NORM_SCALE / 100), 1),
+                    worst_after=z_star_pct,
+                    detail="Minimo normalizzato dei liberi non migliorato."))
                 break
 
-            binding = sorted(w for w in free if sat_scaled[w] == z_star)
+            binding = sorted(w for w in free if norm_scaled[w] == z_star)
             for w in binding:
                 locked_floors[w] = z_star
                 free.remove(w)
-            
+
             last_floor_scaled = z_star
             last_objective_score = None # Reset tracking for the new level
             current_max_time = max_time
 
-            print(f"[OK] Livello bloccato. Minimo dei liberi confermato a {z_star / SATISFACTION_SCALE}; "
+            print(f"[OK] Livello bloccato. Minimo normalizzato dei liberi confermato a {z_star_pct}%; "
                   f"fissati a questo livello: {', '.join(binding)}.")
             if "OPTIMAL" in solver_status:
                 steps.append(RefinementStep(
                     it, "ACCEPTED_OPTIMAL", solver_status,
-                    worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
-                    detail=f"Livello bloccato: {', '.join(binding)} a {z_star / SATISFACTION_SCALE}."))
+                    worst_before=initial_worst_pct, worst_after=z_star_pct,
+                    detail=f"Livello bloccato: {', '.join(binding)} a {z_star_pct}%."))
         else:
             # Soluzione FEASIBLE: migliorata ma non possiamo garantire che sia il tetto massimo.
             # NON blocchiamo e procediamo all'iterazione successiva con il nuovo warm-start.
-            print(f"[*] Avanzamento parziale (FEASIBLE). Minimo provvisorio a {z_star / SATISFACTION_SCALE}. "
+            print(f"[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a {z_star_pct}%. "
                   f"Nessun lavoratore bloccato, proseguo la ricerca...")
             steps.append(RefinementStep(
                 it, "ACCEPTED_FEASIBLE", solver_status,
-                worst_before=initial_worst, worst_after=z_star / SATISFACTION_SCALE,
-                detail=f"Avanzamento parziale, minimo a {z_star / SATISFACTION_SCALE}."))
+                worst_before=initial_worst_pct, worst_after=z_star_pct,
+                detail=f"Avanzamento parziale, minimo a {z_star_pct}%."))
 
     final_sat = dict(best_result.satisfaction_per_worker)
-    # "improved" in senso leximin: il vettore ordinato in modo crescente e'
-    # lessicograficamente migliore (il minimo sale, o a parita' di minimo sale il
-    # secondo peggiore, ecc.). Cattura anche i casi in cui il minimo assoluto e'
-    # gia' al tetto ma la fascia bassa migliora.
-    improved = sorted(final_sat.values()) > sorted(initial_sat.values())
+    final_pct = dict(best_report.fairness.satisfaction_pct_per_worker)
+    # "improved" in senso leximin sulla scala NORMALIZZATA: il vettore delle % di
+    # soddisfazione ordinato in modo crescente e' lessicograficamente migliore (il
+    # minimo normalizzato sale, o a parita' di minimo sale il secondo peggiore...).
+    improved = sorted(final_pct.values()) > sorted(initial_pct.values())
 
     return RefinementOutcome(
         case_label=data.case_label,
@@ -539,6 +592,10 @@ def run_refinement_loop(
         steps=steps,
         initial_satisfaction=initial_sat,
         final_satisfaction=final_sat,
+        initial_worst_pct=initial_worst_pct,
+        final_worst_pct=best_report.fairness.worst_pct,
+        initial_satisfaction_pct=initial_pct,
+        final_satisfaction_pct=final_pct,
     )
 
 
@@ -549,32 +606,38 @@ def print_refinement_summary(data: ProblemData, outcome: RefinementOutcome) -> N
     print(f"\n{'='*64}")
     print(f"FASE 4 - RAFFINAMENTO COMPLETATO | Caso {outcome.case_label}")
     print(f"{'='*64}")
-    print(f"Iterazioni eseguite      : {outcome.iterations_run}")
-    print(f"Minimo iniziale (equita'): {outcome.initial_worst}")
-    print(f"Minimo finale  (equita') : {outcome.final_worst}")
-    print(f"Miglioramento ottenuto   : {'SI' if outcome.improved else 'NO'}")
+    print(f"Iterazioni eseguite          : {outcome.iterations_run}")
+    print(f"Minimo iniziale (assoluto)   : {outcome.initial_worst}")
+    print(f"Minimo finale  (assoluto)    : {outcome.final_worst}")
+    print(f"Minimo normalizzato iniziale : {outcome.initial_worst_pct}%")
+    print(f"Minimo normalizzato finale   : {outcome.final_worst_pct}%  <-- criterio leximin")
+    print(f"Miglioramento ottenuto       : {'SI' if outcome.improved else 'NO'}")
 
-    print("\nStorico livelli leximin:")
+    print("\nStorico livelli leximin (pavimenti in % normalizzata):")
     for s in outcome.steps:
         delta = ""
         if s.worst_after is not None:
-            delta = f" (pavimento -> {s.worst_after})"
-        print(f"  [{s.iteration}] {s.status:<15} status_solver={s.solver_status}"
+            delta = f" (pavimento -> {s.worst_after}%)"
+        print(f"  [{s.iteration}] {s.status:<18} status_solver={s.solver_status}"
               f"{delta} | {s.detail}")
 
-    # Confronto leximin: vettore di soddisfazione (crescente) PRIMA vs DOPO. E' la
-    # vista che mostra il vero effetto del raffinamento: la fascia bassa si alza
-    # anche quando il minimo assoluto e' gia' al suo tetto strutturale.
-    if outcome.initial_satisfaction and outcome.final_satisfaction:
-        ini = outcome.initial_satisfaction
-        fin = outcome.final_satisfaction
-        print("\n--- Soddisfazione per lavoratore: PRIMA -> DOPO (leximin) ---")
-        for w in sorted(ini, key=lambda k: fin.get(k, 0.0)):
-            mark = "  *" if fin.get(w, 0.0) > ini.get(w, 0.0) + 1e-9 else ""
-            print(f"  {w} {data.worker_names.get(w, ''):<22} "
-                  f"{ini.get(w, 0.0):>8.1f} -> {fin.get(w, 0.0):>8.1f}{mark}")
-        print(f"  Minimo : {min(ini.values()):.1f} -> {min(fin.values()):.1f}")
-        print(f"  Somma  : {sum(ini.values()):.1f} -> {sum(fin.values()):.1f}")
+    # Confronto leximin PRIMA vs DOPO, su ENTRAMBE le scale: assoluta (modello di
+    # base) e normalizzata (% del massimo individuale = criterio di equita').
+    ini = outcome.initial_satisfaction
+    fin = outcome.final_satisfaction
+    ini_p = outcome.initial_satisfaction_pct
+    fin_p = outcome.final_satisfaction_pct
+    if ini and fin:
+        print("\n--- Soddisfazione PRIMA -> DOPO | ASSOLUTA  e  NORMALIZZATA (%) ---")
+        print(f"  {'lavoratore':<24}{'assoluta':>18}{'normalizzata':>20}")
+        for w in sorted(ini, key=lambda k: fin_p.get(k, 0.0)):
+            mark = "  *" if fin_p.get(w, 0.0) > ini_p.get(w, 0.0) + 1e-9 else ""
+            print(f"  {w} {data.worker_names.get(w, ''):<20} "
+                  f"{ini.get(w, 0.0):>7.1f} -> {fin.get(w, 0.0):>7.1f}"
+                  f"   {ini_p.get(w, 0.0):>6.1f}% -> {fin_p.get(w, 0.0):>6.1f}%{mark}")
+        print(f"  {'Minimo':<24}{min(ini.values()):>7.1f} -> {min(fin.values()):>7.1f}"
+              f"   {min(ini_p.values()):>6.1f}% -> {min(fin_p.values()):>6.1f}%")
+        print(f"  {'Somma':<24}{sum(ini.values()):>7.1f} -> {sum(fin.values()):>7.1f}")
 
     print("\n--- Orario di riferimento finale (verifica Fase 3) ---")
     print_report(data, outcome.best_report)

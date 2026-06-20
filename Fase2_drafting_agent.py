@@ -490,6 +490,98 @@ def worker_satisfaction(data: ProblemData, schedule: dict, w: str) -> float:
     return round(totale, 2)
 
 
+# ---------------------------------------------------------------------------
+# SODDISFAZIONE NORMALIZZATA (proportional fairness)
+# ---------------------------------------------------------------------------
+# La soddisfazione ASSOLUTA non e' confrontabile tra lavoratori: l'intervallo di
+# valori raggiungibili dipende dalla grandezza dei pesi individuali (chi predilige
+# la Notte, peso modesto e fortemente limitata dai riposi, ha un massimo di poche
+# unita'; chi predilige Mattina/Pomeriggio puo' raggiungere valori di un ordine di
+# grandezza superiore). Per misurare l'equita' "rispetto agli altri" (Stage 3 del
+# PDF) normalizziamo la soddisfazione sul MASSIMO INDIVIDUALE raggiungibile da
+# ciascun lavoratore: sat_norm(w) = sat(w) / sat_max(w) in [.., 1]. Misura quanto
+# un lavoratore e' vicino al PROPRIO ottimo, su una scala comune a tutti.
+_SAT_MAX_CACHE: Dict[str, Dict[str, float]] = {}
+
+
+def compute_sat_max(data: ProblemData) -> Dict[str, float]:
+    """
+    Per ogni lavoratore calcola la soddisfazione ASSOLUTA massima teorica
+    ottenibile rispettando i SOLI vincoli hard INDIVIDUALI (esclusi i vincoli di
+    copertura/staffing, che accoppiano piu' lavoratori): e' il "punto ideale" del
+    lavoratore. In isolamento il lavoratore evita naturalmente i propri giorni di
+    ferie, quindi sat_max non include penalita'. Usato come denominatore per la
+    soddisfazione normalizzata. Risultato cache-ato per case_label.
+    """
+    if data.case_label in _SAT_MAX_CACHE:
+        return _SAT_MAX_CACHE[data.case_label]
+
+    num_days = input_data.NUM_DAYS
+    codes = input_data.SHIFT_CODES
+    weight = {s: input_data.SHIFTS[s]["peso_turni"] for s in codes}
+    hours = {s: input_data.SHIFTS[s]["durata_ore"] for s in codes}
+
+    sat_max: Dict[str, float] = {}
+    for w in data.worker_ids:
+        model = cp_model.CpModel()
+        x = {(d, s): model.NewBoolVar(f"x_{d}_{s}")
+             for d in range(num_days) for s in codes}
+        # Max 1 turno/giorno.
+        for d in range(num_days):
+            model.AddAtMostOne(x[(d, s)] for s in codes)
+        # Turni vietati (hard per-lavoratore).
+        for s in data.forbidden.get(w, set()):
+            for d in range(num_days):
+                model.Add(x[(d, s)] == 0)
+        # Esattamente 25 turni mensili pesati (la Notte vale 2).
+        model.Add(sum(
+            weight[s] * x[(d, s)] for d in range(num_days) for s in codes) == 25)
+        # Finestre settimanali scorrevoli: <=36h e <=6 turni (>=1 riposo).
+        for t in range(num_days - 6):
+            finestra = range(t, t + 7)
+            model.Add(sum(
+                hours[s] * x[(d, s)] for d in finestra for s in codes) <= 36)
+            model.Add(sum(
+                x[(d, s)] for d in finestra for s in codes) <= 6)
+        # Divieto Notte(d) -> Mattina(d+1).
+        for d in range(num_days - 1):
+            model.Add(x[(d, "N")] + x[(d + 1, "M")] <= 1)
+        # 2 giorni di riposo totale dopo ogni Notte.
+        for d in range(num_days):
+            for k in (1, 2):
+                if d + k < num_days:
+                    for s in codes:
+                        model.Add(x[(d, "N")] + x[(d + k, s)] <= 1)
+        # Obiettivo: massimizza la sola soddisfazione (pesi turno scalati).
+        pesi = data.preferences[w]["satisfaction_weights"]
+        model.Maximize(sum(
+            int(round(pesi[s] * SATISFACTION_SCALE)) * x[(d, s)]
+            for d in range(num_days) for s in codes))
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = 10.0
+        solver.parameters.num_search_workers = 8
+        solver.parameters.log_search_progress = False
+        status = solver.Solve(model)
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            sat_max[w] = round(solver.ObjectiveValue() / SATISFACTION_SCALE, 2)
+        else:
+            sat_max[w] = 0.0
+
+    _SAT_MAX_CACHE[data.case_label] = sat_max
+    return sat_max
+
+
+def worker_satisfaction_pct(sat_abs: float, sat_max: float) -> float:
+    """
+    Soddisfazione NORMALIZZATA in percentuale: quanto il lavoratore e' vicino al
+    proprio ottimo individuale. 100% = orario ideale per lui; valori bassi (anche
+    negativi, se forzato su ferie/turni sgraditi) = lontano dal proprio ottimo.
+    Il denominatore e' protetto (>=0.1) per i rari casi sat_max<=0.
+    """
+    denom = sat_max if sat_max > 0.1 else 0.1
+    return round(100.0 * sat_abs / denom, 1)
+
+
 def _build_llm_context(data: ProblemData, max_time: float) -> dict:
     """Pre-popola il namespace di esecuzione con i dati che il codice LLM usera'."""
     shifts = input_data.SHIFTS
@@ -625,9 +717,12 @@ def export_csv(data: ProblemData, result: ScheduleResult, path: Optional[str] = 
     if path is None:
         path = f"schedule_case_{data.case_label}.csv"
 
+    # Colonne finali: soddisfazione ASSOLUTA (modello di base) + il MASSIMO
+    # individuale e la soddisfazione NORMALIZZATA in % (metrica di equita').
+    sat_max = compute_sat_max(data)
     intestazioni = ["worker_id", "nome"] + [
         d.isoformat() for d in input_data.PLANNING_DATES
-    ] + ["tot_turni_pesati", "soddisfazione"]
+    ] + ["tot_turni_pesati", "soddisfazione", "sat_max", "soddisfazione_pct"]
 
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -641,8 +736,11 @@ def export_csv(data: ProblemData, result: ScheduleResult, path: Optional[str] = 
                 riga.append(s if s else "-")
                 if s:
                     tot_peso += weight[s]
+            sat_abs = result.satisfaction_per_worker.get(w, 0.0)
             riga.append(tot_peso)
-            riga.append(result.satisfaction_per_worker.get(w, 0.0))
+            riga.append(sat_abs)
+            riga.append(sat_max.get(w, 0.0))
+            riga.append(worker_satisfaction_pct(sat_abs, sat_max.get(w, 0.0)))
             writer.writerow(riga)
 
     print(f"[+] Schedulazione salvata in: {path}")

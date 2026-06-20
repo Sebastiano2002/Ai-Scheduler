@@ -47,9 +47,11 @@ import input_data
 from Fase2_drafting_agent import (
     ProblemData,
     ScheduleResult,
+    compute_sat_max,
     load_problem_data,
     run_llm_drafting,
     worker_satisfaction,
+    worker_satisfaction_pct,
 )
 
 
@@ -99,6 +101,9 @@ class FairnessMetrics:
 
     satisfaction_per_worker: Dict[str, float]
     # Lavoratore piu' svantaggiato (cuore della Fase 3, input della Fase 4).
+    # E' identificato sulla soddisfazione NORMALIZZATA (vedi sotto), cioe' chi e'
+    # piu' lontano dal PROPRIO ottimo individuale: questo e' il "more disadvantaged
+    # compared to the others" del PDF, equo perche' su scala comune a tutti.
     worst_worker_id: str
     worst_worker_name: str
     worst_satisfaction: float
@@ -113,6 +118,17 @@ class FairnessMetrics:
     mean_satisfaction: float    # media per lavoratore
     spread: float               # max - min: divario di (dis)uguaglianza
     std_satisfaction: float     # deviazione standard (dispersione)
+    # --- METRICHE NORMALIZZATE (proportional fairness) ------------------------
+    # Soddisfazione in % del massimo individuale di ciascun lavoratore. Sono la
+    # base CORRETTA per il confronto tra lavoratori e per il leximin (Fase 4).
+    # Affiancate alle assolute per permettere il confronto diretto.
+    sat_max_per_worker: Dict[str, float] = field(default_factory=dict)
+    satisfaction_pct_per_worker: Dict[str, float] = field(default_factory=dict)
+    worst_pct: float = 0.0      # % del piu' svantaggiato (minimo normalizzato)
+    best_pct: float = 0.0       # % del piu' avvantaggiato (massimo normalizzato)
+    mean_pct: float = 0.0       # % media
+    spread_pct: float = 0.0     # scarto max-min in %
+    std_pct: float = 0.0        # deviazione standard delle %
 
 
 @dataclass
@@ -308,8 +324,11 @@ class HardConstraintVerifier:
 class FairnessVerifier:
     """
     Calcola il punteggio di soddisfazione di ogni lavoratore e identifica
-    esplicitamente il lavoratore piu' svantaggiato (punteggio minimo) con il
-    suo score: e' l'unico dato richiesto dalla Fase 4.
+    esplicitamente il lavoratore piu' svantaggiato. L'identificazione avviene
+    sulla soddisfazione NORMALIZZATA (% del massimo individuale): cosi' il
+    confronto e' equo tra lavoratori con preferenze e scale diverse, come richiede
+    il PDF ("most disadvantaged compared to the others"). Le metriche assolute
+    restano calcolate e riportate in parallelo per il confronto.
     """
 
     def __init__(self, data: ProblemData):
@@ -321,10 +340,20 @@ class FairnessVerifier:
         for w in self.data.worker_ids:
             sat.setdefault(w, 0.0)
 
-        worst = min(self.data.worker_ids, key=lambda w: sat[w])
-        best = max(self.data.worker_ids, key=lambda w: sat[w])
+        # Massimo individuale e soddisfazione normalizzata (% del proprio ottimo).
+        sat_max = compute_sat_max(self.data)
+        pct = {w: worker_satisfaction_pct(sat[w], sat_max.get(w, 0.0))
+               for w in self.data.worker_ids}
+
+        # Il piu' svantaggiato e il piu' avvantaggiato sono determinati sulla
+        # scala NORMALIZZATA (equa), non sui valori assoluti.
+        worst = min(self.data.worker_ids, key=lambda w: pct[w])
+        best = max(self.data.worker_ids, key=lambda w: pct[w])
+
         valori = [sat[w] for w in self.data.worker_ids]
+        valori_pct = [pct[w] for w in self.data.worker_ids]
         dev = statistics.pstdev(valori) if len(valori) > 1 else 0.0
+        dev_pct = statistics.pstdev(valori_pct) if len(valori_pct) > 1 else 0.0
 
         return FairnessMetrics(
             satisfaction_per_worker=sat,
@@ -336,8 +365,15 @@ class FairnessVerifier:
             best_satisfaction=round(sat[best], 2),
             total_satisfaction=round(sum(valori), 2),
             mean_satisfaction=round(statistics.mean(valori), 2),
-            spread=round(sat[best] - sat[worst], 2),
+            spread=round(max(valori) - min(valori), 2),
             std_satisfaction=round(dev, 2),
+            sat_max_per_worker=sat_max,
+            satisfaction_pct_per_worker=pct,
+            worst_pct=round(pct[worst], 1),
+            best_pct=round(pct[best], 1),
+            mean_pct=round(statistics.mean(valori_pct), 1),
+            spread_pct=round(pct[best] - pct[worst], 1),
+            std_pct=round(dev_pct, 1),
         )
 
 
@@ -466,27 +502,31 @@ def print_report(data: ProblemData, report: VerificationReport) -> None:
 
     # --- Esito Fairness Verification Agent ---
     fm = report.fairness
-    print(f"\n  >> METRICHE DI EQUITA' (fairness metrics):")
-    print(f"     Soddisfazione totale : {fm.total_satisfaction}")
-    print(f"     Media per lavoratore : {fm.mean_satisfaction}")
-    print(f"     Minimo (peggiore)    : {fm.worst_satisfaction:>7}  "
+    print(f"\n  >> METRICHE DI EQUITA' (fairness metrics) | ASSOLUTA vs NORMALIZZATA (%):")
+    print(f"     {'':<22}{'ASSOLUTA':>12}{'NORM. (%)':>12}")
+    print(f"     {'Soddisfazione totale':<22}{fm.total_satisfaction:>12}{'-':>12}")
+    print(f"     {'Media per lavoratore':<22}{fm.mean_satisfaction:>12}{fm.mean_pct:>11}%")
+    print(f"     {'Minimo (peggiore)':<22}{fm.worst_satisfaction:>12}{fm.worst_pct:>11}%  "
           f"[{fm.worst_worker_id} {fm.worst_worker_name}]")
-    print(f"     Massimo (migliore)   : {fm.best_satisfaction:>7}  "
+    print(f"     {'Massimo (migliore)':<22}{fm.best_satisfaction:>12}{fm.best_pct:>11}%  "
           f"[{fm.best_worker_id} {fm.best_worker_name}]")
-    print(f"     Scarto max-min       : {fm.spread:>7}  (piu' basso = piu' equo)")
-    print(f"     Deviazione standard  : {fm.std_satisfaction:>7}  (dispersione)")
+    print(f"     {'Scarto max-min':<22}{fm.spread:>12}{fm.spread_pct:>11}%  (piu' basso = piu' equo)")
+    print(f"     {'Deviazione standard':<22}{fm.std_satisfaction:>12}{fm.std_pct:>11}%")
 
-    print(f"\n  >> LAVORATORE PIU' SVANTAGGIATO (input Fase 4):")
+    print(f"\n  >> LAVORATORE PIU' SVANTAGGIATO (input Fase 4, su scala NORMALIZZATA):")
     print(f"     {fm.worst_worker_id} ({fm.worst_worker_name}) "
-          f"= {fm.worst_satisfaction}")
+          f"= {fm.worst_pct}% del proprio massimo ({fm.worst_satisfaction} su {fm.sat_max_per_worker.get(fm.worst_worker_id, 0.0)})")
 
-    # Classifica completa (utile per il report finale di consegna).
-    print(f"\n  Soddisfazione per lavoratore (crescente):")
-    ordinati = sorted(data.worker_ids, key=lambda w: fm.satisfaction_per_worker[w])
+    # Classifica completa (utile per il report finale di consegna): ordinata sulla
+    # scala NORMALIZZATA, con accanto la soddisfazione assoluta e il massimo.
+    print(f"\n  Classifica per soddisfazione NORMALIZZATA (crescente):")
+    print(f"     {'lavoratore':<26}{'norm.%':>8}{'assoluta':>10}{'max':>8}")
+    ordinati = sorted(data.worker_ids, key=lambda w: fm.satisfaction_pct_per_worker[w])
     for w in ordinati:
         marcatore = "  <-- meno soddisfatto" if w == fm.worst_worker_id else ""
-        print(f"     {w} {data.worker_names[w]:<20} "
-              f"{fm.satisfaction_per_worker[w]:>7}{marcatore}")
+        nome = f"{w} {data.worker_names[w]}"
+        print(f"     {nome:<26}{fm.satisfaction_pct_per_worker[w]:>7}%"
+              f"{fm.satisfaction_per_worker[w]:>10}{fm.sat_max_per_worker.get(w, 0.0):>8}{marcatore}")
 
 
 # ===========================================================================
