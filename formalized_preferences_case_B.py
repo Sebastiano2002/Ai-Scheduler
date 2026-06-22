@@ -1,6 +1,6 @@
 """
 formalized_preferences_case_B.py
-Generato automaticamente dal Workers Agent (Fase 1) il 2026-06-19T21:12:25.
+Generato automaticamente dal Workers Agent (Fase 1) il 2026-06-22T19:15:01.
 Use Case B: preferenze formalizzate dei lavoratori.
 
 Distinzione esplicita tra Vincoli Hard e Vincoli Soft:
@@ -58,8 +58,8 @@ SOFT_CONSTRAINTS = {   'W01': {   'nome': 'Marco Rossi',
                'turni_preferiti': ['N'],
                'turni_indesiderati': ['M'],
                'giorni_indesiderati': ['2027-01-01'],
-               'flexibility_score': 0.4,
-               'satisfaction_weights': {'M': -3.6, 'P': 0.0, 'N': 5.0}},
+               'flexibility_score': 0.6,
+               'satisfaction_weights': {'M': -2.4, 'P': 0.0, 'N': 5.0}},
     'W04': {   'nome': 'Sara Russo',
                'turni_preferiti': ['P'],
                'turni_indesiderati': ['N'],
@@ -83,7 +83,7 @@ SOFT_CONSTRAINTS = {   'W01': {   'nome': 'Marco Rossi',
                'turni_indesiderati': ['M'],
                'giorni_indesiderati': ['2026-12-19', '2026-12-20'],
                'flexibility_score': 0.6,
-               'satisfaction_weights': {'M': -2.4, 'P': 3.0, 'N': 4.0}},
+               'satisfaction_weights': {'M': -2.4, 'P': 3.0, 'N': 5.0}},
     'W08': {   'nome': 'Francesca Ricci',
                'turni_preferiti': ['M', 'P'],
                'turni_indesiderati': [],
@@ -106,8 +106,8 @@ SOFT_CONSTRAINTS = {   'W01': {   'nome': 'Marco Rossi',
                'turni_preferiti': ['M'],
                'turni_indesiderati': ['N'],
                'giorni_indesiderati': ['2026-12-25'],
-               'flexibility_score': 0.3,
-               'satisfaction_weights': {'M': 5.0, 'P': 0.0, 'N': -4.2}},
+               'flexibility_score': 0.6,
+               'satisfaction_weights': {'M': 5.0, 'P': 0.0, 'N': -2.4}},
     'W12': {   'nome': 'Valentina Bruno',
                'turni_preferiti': ['N'],
                'turni_indesiderati': [],
@@ -160,6 +160,6 @@ SOFT_CONSTRAINTS = {   'W01': {   'nome': 'Marco Rossi',
                'turni_preferiti': ['N', 'P'],
                'turni_indesiderati': ['M'],
                'giorni_indesiderati': [],
-               'flexibility_score': 0.4,
-               'satisfaction_weights': {'M': -3.6, 'P': 3.0, 'N': 5.0}}}
+               'flexibility_score': 0.6,
+               'satisfaction_weights': {'M': -2.4, 'P': 3.0, 'N': 5.0}}}
 

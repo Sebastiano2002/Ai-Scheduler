@@ -220,8 +220,8 @@ def build_drafting_prompt(data: ProblemData) -> str:
             f"'specializzato' (SPECIALIZED_IDS) e almeno {min_std + min_spec} "
             f"lavoratori TOTALI (gli specializzati possono coprire anche i ruoli "
             f"standard). In formule, per ogni giorno d e turno s:\n"
-            f"    cp_model.LinearExpr.sum(x[(w, d, s)] for w in SPECIALIZED_IDS) >= {min_spec}\n"
-            f"    cp_model.LinearExpr.sum(x[(w, d, s)] for w in WORKER_IDS) >= {min_std + min_spec}"
+            f"    cp_model.LinearExpr.sum([x[(w, d, s)] for w in SPECIALIZED_IDS]) >= {min_spec}\n"
+            f"    cp_model.LinearExpr.sum([x[(w, d, s)] for w in WORKER_IDS]) >= {min_std + min_spec}"
         )
 
     prompt = f"""Sei il "Drafting Agent" di SmartScheduler, un sistema di schedulazione di
@@ -317,10 +317,10 @@ for w in WORKER_IDS:
 for w in WORKER_IDS:
     for t in range(NUM_DAYS - 6):      # finestre di 7 giorni: t, t+1, ..., t+6
         finestra = range(t, t + 7)
-        model.Add(cp_model.LinearExpr.sum(SHIFT_HOURS[s] * x[(w, d, s)]
-                      for d in finestra for s in SHIFT_CODES) <= 36)
-        model.Add(cp_model.LinearExpr.sum(x[(w, d, s)]
-                      for d in finestra for s in SHIFT_CODES) <= 6)
+        model.Add(cp_model.LinearExpr.sum([SHIFT_HOURS[s] * x[(w, d, s)]
+                      for d in finestra for s in SHIFT_CODES]) <= 36)
+        model.Add(cp_model.LinearExpr.sum([x[(w, d, s)]
+                      for d in finestra for s in SHIFT_CODES]) <= 6)
 ```
 
 **Vincolo 3b (Notte->Mattina) - usa ESATTAMENTE questo pattern:**
@@ -345,7 +345,7 @@ Massimizza un obiettivo UNICO = SODDISFAZIONE - PENALITA' FERIE - PENALITA' DI E
 Poiche' CP-SAT lavora con interi, scala TUTTO per {SATISFACTION_SCALE} e arrotonda.
 
 **(a) Soddisfazione + penalita' per i GIORNI INDESIDERATI (ferie).**
-  - soddisfazione dei turni: cp_model.LinearExpr.sum( PREFERENCES[w]['satisfaction_weights'][s] * x[w,d,s] );
+  - soddisfazione dei turni: sum( PREFERENCES[w]['satisfaction_weights'][s] * x[w,d,s] );
   - per ogni turno assegnato a w in un giorno d in UNDESIRED_DAYS[w], sottrai
     UNDESIRED_DAY_PENALTY. Questa penalita' e' molto alta: il solver evitera' con
     forza quei giorni, ma in emergenza potra' usarli (NON e' un divieto).
@@ -375,7 +375,7 @@ Usa ESATTAMENTE questo pattern con variabili ausiliarie IntVar + AddMaxEquality/
 night_counts = []
 for w in WORKER_IDS:
     nc = model.NewIntVar(0, NUM_DAYS, f"nights_{{w}}")
-    model.Add(nc == cp_model.LinearExpr.sum(x[(w, d, 'N')] for d in range(NUM_DAYS)))
+    model.Add(nc == cp_model.LinearExpr.sum([x[(w, d, 'N')] for d in range(NUM_DAYS)]))
     night_counts.append(nc)
 max_n = model.NewIntVar(0, NUM_DAYS, "max_nights")
 min_n = model.NewIntVar(0, NUM_DAYS, "min_nights")
@@ -387,7 +387,7 @@ obiettivo.append(-int(round(NIGHT_BALANCE_PENALTY * {SATISFACTION_SCALE})) * (ma
 violation_counts = []
 for w in WORKER_IDS:
     vc = model.NewIntVar(0, NUM_DAYS, f"viol_{{w}}")
-    model.Add(vc == cp_model.LinearExpr.sum(x[(w, d, s)] for d in UNDESIRED_DAYS[w] for s in SHIFT_CODES))
+    model.Add(vc == cp_model.LinearExpr.sum([x[(w, d, s)] for d in UNDESIRED_DAYS[w] for s in SHIFT_CODES]))
     violation_counts.append(vc)
 max_v = model.NewIntVar(0, NUM_DAYS, "max_viol")
 min_v = model.NewIntVar(0, NUM_DAYS, "min_viol")
@@ -407,7 +407,7 @@ def build_model():
     x = {{(w, d, s): model.NewBoolVar(f"x_{{w}}_{{d}}_{{s}}")
           for w in WORKER_IDS for d in range(NUM_DAYS) for s in SHIFT_CODES}}
     # >>> QUI tutti i vincoli hard descritti sopra: max 1 turno/giorno, turni
-    #     vietati, ESATTAMENTE 25 turni pesati (cp_model.LinearExpr.sum(SHIFT_WEIGHT[s]*x) == 25),
+    #     vietati, ESATTAMENTE 25 turni pesati (cp_model.LinearExpr.sum([SHIFT_WEIGHT[s]*x]) == 25),
     #     finestre settimanali (<=36h e <=6 turni), N->M, 2 riposi dopo la Notte,
     #     staffing dello use case. Usa 'model' e 'x'. NESSUN obiettivo qui dentro.
     return model, x
@@ -418,8 +418,8 @@ def build_model():
 #     da usare come hint per la FASE B. (Senza questo obiettivo la sola
 #     feasibility del modello esatto puo' richiedere oltre 2 minuti.) ---
 model_a, x_a = build_model()
-model_a.Maximize(cp_model.LinearExpr.sum(SHIFT_WEIGHT[s] * x_a[(w, d, s)]
-                     for w in WORKER_IDS for d in range(NUM_DAYS) for s in SHIFT_CODES))
+model_a.Maximize(cp_model.LinearExpr.sum([SHIFT_WEIGHT[s] * x_a[(w, d, s)]
+                     for w in WORKER_IDS for d in range(NUM_DAYS) for s in SHIFT_CODES]))
 solver_a = cp_model.CpSolver()
 solver_a.parameters.max_time_in_seconds = max(20.0, MAX_TIME * 0.4)
 solver_a.parameters.num_search_workers = 8
