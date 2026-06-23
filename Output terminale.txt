@@ -1,0 +1,319 @@
+BOZZA SCHEDULAZIONE - Caso B (sorgente: llm)
+================================================================
+Status solver        : FEASIBLE
+Fattibile            : True
+Valore obiettivo     : 1287.8
+Soddisfazione totale : 1287.8
+Meno soddisfatto     : W12 (Valentina Bruno) = 7.0
+Piu' soddisfatto     : W04 (Sara Russo) = 125.0
+
+Conteggio turni assegnati per codice:
+  M (Mattina): 157
+  P (Pomeriggio): 151
+  N (Notte): 96
+
+Distribuzione carico gravoso (equita' - scarto basso = piu' equo):
+  Notti           per lavoratore: min 0, max 7, scarto 7
+  Violazioni ferie per lavoratore: min 0, max 0, scarto 0
+[+] Schedulazione salvata in: schedule_case_B.csv
+[+] Codice cp_model della bozza salvato in: draft_code_case_B.txt
+
+################################################################
+# PIPELINE | FASE 3 - VERIFICATION AGENT | Caso B
+################################################################
+
+================================================================
+FASE 3 - VERIFICA | Caso B (sorgente bozza: llm)
+================================================================
+[OK] Vincoli hard: TUTTI rispettati (piano matematicamente valido).
+
+  >> METRICHE DI EQUITA' (fairness metrics) | ASSOLUTA vs NORMALIZZATA (%):
+                               ASSOLUTA   NORM. (%)
+     Soddisfazione totale        1287.8           -
+     Media per lavoratore         64.39       71.1%
+     Minimo (peggiore)             54.2       43.4%  [W14 Roberto Ferrara]
+     Massimo (migliore)           125.0      100.0%  [W04 Sara Russo]
+     Scarto max-min               118.0       56.6%  (piu' basso = piu' equo)
+     Deviazione standard           34.8       18.5%
+
+  >> LAVORATORE PIU' SVANTAGGIATO (input Fase 4, su scala NORMALIZZATA):
+     W14 (Roberto Ferrara) = 43.4% del proprio massimo (54.2 su 125.0)
+
+  Classifica per soddisfazione NORMALIZZATA (crescente):
+     lavoratore                  norm.%  assoluta     max
+     W14 Roberto Ferrara          43.4%      54.2   125.0  <-- meno soddisfatto
+     W05 Andrea Esposito          44.0%      11.0    25.0
+     W15 Monica Cattaneo          50.4%      63.0   125.0
+     W02 Giulia Bianchi           52.0%      78.0   150.0
+     W18 Gianni Serra             52.0%      13.0    25.0
+     W01 Marco Rossi              52.8%      66.0   125.0
+     W17 Laura Mancini            56.5%      70.6   125.0
+     W10 Elena Marino             60.8%      76.0   125.0
+     W06 Chiara Romano            65.9%      82.4   125.0
+     W11 Alessandro Conti         65.9%      82.4   125.0
+     W09 Davide Greco             72.0%      54.0    75.0
+     W19 Paola Costa              74.4%      93.0   125.0
+     W03 Luca Ferrari             87.5%      35.0    40.0
+     W12 Valentina Bruno          87.5%       7.0     8.0
+     W16 Stefano Leone            87.5%       7.0     8.0
+     W13 Simone Gallo             88.2%     110.2   125.0
+     W07 Matteo Colombo           90.7%      68.0    75.0
+     W20 Fabio Martini            92.0%      69.0    75.0
+     W08 Francesca Ricci          98.4%     123.0   125.0
+     W04 Sara Russo              100.0%     125.0   125.0
+
+################################################################
+# FASE 4 - REFINEMENT AGENT (LEXIMIN) | Caso B
+# Minimo di partenza: W14 (Roberto Ferrara) = 54.2
+# Iterazioni massime (salvaguardia): 25
+################################################################
+
+----------------------------------------------------------------
+[Livello leximin 1/25] liberi=20 fissati=0
+----------------------------------------------------------------
+
+============================================================
+[*] Tentativo 1/3
+============================================================
+[*] Invio del prompt originale all'LLM...
+[+] Codice generato (4986 caratteri). Esecuzione...
+[+] Codice eseguito con successo al tentativo 1!
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 52.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 2/25] liberi=20 fissati=0
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 52.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 3/25] liberi=20 fissati=0
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 52.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 4/25] liberi=20 fissati=0
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 52.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 5/25] liberi=20 fissati=0
+----------------------------------------------------------------
+[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a 120.0s per un 'Deep Dive'.
+
+----------------------------------------------------------------
+[Livello leximin 6/25] liberi=20 fissati=0
+----------------------------------------------------------------
+[X] Impantanato anche dopo il Deep Dive (120.0s). Forzo il blocco del livello come se fosse OPTIMAL.
+[OK] Livello bloccato. Minimo normalizzato dei liberi confermato a 52.0%; fissati a questo livello: W01, W05, W14, W18.
+
+----------------------------------------------------------------
+[Livello leximin 7/25] liberi=16 fissati=4
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 56.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 8/25] liberi=16 fissati=4
+----------------------------------------------------------------
+[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a 120.0s per un 'Deep Dive'.
+
+----------------------------------------------------------------
+[Livello leximin 9/25] liberi=16 fissati=4
+----------------------------------------------------------------
+[X] Impantanato anche dopo il Deep Dive (120.0s). Forzo il blocco del livello come se fosse OPTIMAL.
+[OK] Livello bloccato. Minimo normalizzato dei liberi confermato a 56.0%; fissati a questo livello: W17.
+
+----------------------------------------------------------------
+[Livello leximin 10/25] liberi=15 fissati=5
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 60.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 11/25] liberi=15 fissati=5
+----------------------------------------------------------------
+[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a 120.0s per un 'Deep Dive'.
+
+----------------------------------------------------------------
+[Livello leximin 12/25] liberi=15 fissati=5
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 64.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 13/25] liberi=15 fissati=5
+----------------------------------------------------------------
+[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a 120.0s per un 'Deep Dive'.
+
+----------------------------------------------------------------
+[Livello leximin 14/25] liberi=15 fissati=5
+----------------------------------------------------------------
+[X] Impantanato anche dopo il Deep Dive (120.0s). Forzo il blocco del livello come se fosse OPTIMAL.
+[OK] Livello bloccato. Minimo normalizzato dei liberi confermato a 64.0%; fissati a questo livello: W04.
+
+----------------------------------------------------------------
+[Livello leximin 15/25] liberi=14 fissati=6
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 65.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 16/25] liberi=14 fissati=6
+----------------------------------------------------------------
+[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a 120.0s per un 'Deep Dive'.
+
+----------------------------------------------------------------
+[Livello leximin 17/25] liberi=14 fissati=6
+----------------------------------------------------------------
+[X] Impantanato anche dopo il Deep Dive (120.0s). Forzo il blocco del livello come se fosse OPTIMAL.
+[OK] Livello bloccato. Minimo normalizzato dei liberi confermato a 65.0%; fissati a questo livello: W06, W11.
+
+----------------------------------------------------------------
+[Livello leximin 18/25] liberi=12 fissati=8
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 68.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 19/25] liberi=12 fissati=8
+----------------------------------------------------------------
+[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a 120.0s per un 'Deep Dive'.
+
+----------------------------------------------------------------
+[Livello leximin 20/25] liberi=12 fissati=8
+----------------------------------------------------------------
+[X] Impantanato anche dopo il Deep Dive (120.0s). Forzo il blocco del livello come se fosse OPTIMAL.
+[OK] Livello bloccato. Minimo normalizzato dei liberi confermato a 68.0%; fissati a questo livello: W02, W19.
+
+----------------------------------------------------------------
+[Livello leximin 21/25] liberi=10 fissati=10
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 70.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 22/25] liberi=10 fissati=10
+----------------------------------------------------------------
+[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a 120.0s per un 'Deep Dive'.
+
+----------------------------------------------------------------
+[Livello leximin 23/25] liberi=10 fissati=10
+----------------------------------------------------------------
+[X] Impantanato anche dopo il Deep Dive (120.0s). Forzo il blocco del livello come se fosse OPTIMAL.
+[OK] Livello bloccato. Minimo normalizzato dei liberi confermato a 70.0%; fissati a questo livello: W15.
+
+----------------------------------------------------------------
+[Livello leximin 24/25] liberi=9 fissati=11
+----------------------------------------------------------------
+[*] Avanzamento parziale (FEASIBLE). Minimo normalizzato provvisorio a 72.0%. Nessun lavoratore bloccato, proseguo la ricerca...
+
+----------------------------------------------------------------
+[Livello leximin 25/25] liberi=9 fissati=11
+----------------------------------------------------------------
+[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a 120.0s per un 'Deep Dive'.
+[+] Schedulazione salvata in: schedule_case_B_final.csv
+[+] Codice cp_model della bozza salvato in: final_code_case_B.txt
+
+================================================================
+FASE 4 - RAFFINAMENTO COMPLETATO | Caso B
+================================================================
+Iterazioni eseguite          : 25
+Minimo iniziale (assoluto)   : 54.2
+Minimo finale  (assoluto)    : 13.0
+Minimo normalizzato iniziale : 43.4%
+Minimo normalizzato finale   : 52.0%  <-- criterio leximin
+Miglioramento ottenuto       : SI
+
+Storico livelli leximin (pavimenti in % normalizzata):
+  [1] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 52.0%) | Avanzamento parziale, minimo a 52.0%.
+  [2] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 52.0%) | Avanzamento parziale, minimo a 52.0%.
+  [3] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 52.0%) | Avanzamento parziale, minimo a 52.0%.
+  [4] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 52.0%) | Avanzamento parziale, minimo a 52.0%.
+  [5] STUCK_DOUBLING_TIME status_solver=FEASIBLE (pavimento -> 52.0%) | Nessun progresso. Deep dive 120.0s nel prossimo ciclo.
+  [6] FORCED_OPTIMAL     status_solver=FEASIBLE (pavimento -> 52.0%) | Resa (Early Stop) dopo Deep Dive 120.0s.
+  [7] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 56.0%) | Avanzamento parziale, minimo a 56.0%.
+  [8] STUCK_DOUBLING_TIME status_solver=FEASIBLE (pavimento -> 56.0%) | Nessun progresso. Deep dive 120.0s nel prossimo ciclo.
+  [9] FORCED_OPTIMAL     status_solver=FEASIBLE (pavimento -> 56.0%) | Resa (Early Stop) dopo Deep Dive 120.0s.
+  [10] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 60.0%) | Avanzamento parziale, minimo a 60.0%.
+  [11] STUCK_DOUBLING_TIME status_solver=FEASIBLE (pavimento -> 60.0%) | Nessun progresso. Deep dive 120.0s nel prossimo ciclo.
+  [12] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 64.0%) | Avanzamento parziale, minimo a 64.0%.
+  [13] STUCK_DOUBLING_TIME status_solver=FEASIBLE (pavimento -> 64.0%) | Nessun progresso. Deep dive 120.0s nel prossimo ciclo.
+  [14] FORCED_OPTIMAL     status_solver=FEASIBLE (pavimento -> 64.0%) | Resa (Early Stop) dopo Deep Dive 120.0s.
+  [15] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 65.0%) | Avanzamento parziale, minimo a 65.0%.
+  [16] STUCK_DOUBLING_TIME status_solver=FEASIBLE (pavimento -> 65.0%) | Nessun progresso. Deep dive 120.0s nel prossimo ciclo.
+  [17] FORCED_OPTIMAL     status_solver=FEASIBLE (pavimento -> 65.0%) | Resa (Early Stop) dopo Deep Dive 120.0s.
+  [18] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 68.0%) | Avanzamento parziale, minimo a 68.0%.
+  [19] STUCK_DOUBLING_TIME status_solver=FEASIBLE (pavimento -> 68.0%) | Nessun progresso. Deep dive 120.0s nel prossimo ciclo.
+  [20] FORCED_OPTIMAL     status_solver=FEASIBLE (pavimento -> 68.0%) | Resa (Early Stop) dopo Deep Dive 120.0s.
+  [21] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 70.0%) | Avanzamento parziale, minimo a 70.0%.
+  [22] STUCK_DOUBLING_TIME status_solver=FEASIBLE (pavimento -> 70.0%) | Nessun progresso. Deep dive 120.0s nel prossimo ciclo.
+  [23] FORCED_OPTIMAL     status_solver=FEASIBLE (pavimento -> 70.0%) | Resa (Early Stop) dopo Deep Dive 120.0s.
+  [24] ACCEPTED_FEASIBLE  status_solver=FEASIBLE (pavimento -> 72.0%) | Avanzamento parziale, minimo a 72.0%.
+  [25] STUCK_DOUBLING_TIME status_solver=FEASIBLE (pavimento -> 72.0%) | Nessun progresso. Deep dive 120.0s nel prossimo ciclo.
+
+--- Soddisfazione PRIMA -> DOPO | ASSOLUTA  e  NORMALIZZATA (%) ---
+  lavoratore                        assoluta        normalizzata
+  W05 Andrea Esposito         11.0 ->    13.0     44.0% ->   52.0%  *
+  W18 Gianni Serra            13.0 ->    13.0     52.0% ->   52.0%
+  W01 Marco Rossi             66.0 ->    66.0     52.8% ->   52.8%
+  W14 Roberto Ferrara         54.2 ->    66.0     43.4% ->   52.8%  *
+  W17 Laura Mancini           70.6 ->    70.6     56.5% ->   56.5%
+  W06 Chiara Romano           82.4 ->    82.4     65.9% ->   65.9%
+  W11 Alessandro Conti        82.4 ->    82.4     65.9% ->   65.9%
+  W02 Giulia Bianchi          78.0 ->   102.0     52.0% ->   68.0%  *
+  W19 Paola Costa             93.0 ->    86.0     74.4% ->   68.8%
+  W15 Monica Cattaneo         63.0 ->    87.8     50.4% ->   70.2%  *
+  W09 Davide Greco            54.0 ->    54.0     72.0% ->   72.0%
+  W10 Elena Marino            76.0 ->    90.0     60.8% ->   72.0%  *
+  W04 Sara Russo             125.0 ->    95.4    100.0% ->   76.3%
+  W13 Simone Gallo           110.2 ->    95.4     88.2% ->   76.3%
+  W12 Valentina Bruno          7.0 ->     7.0     87.5% ->   87.5%
+  W07 Matteo Colombo          68.0 ->    68.0     90.7% ->   90.7%
+  W20 Fabio Martini           69.0 ->    69.0     92.0% ->   92.0%
+  W03 Luca Ferrari            35.0 ->    40.0     87.5% ->  100.0%  *
+  W08 Francesca Ricci        123.0 ->   125.0     98.4% ->  100.0%  *
+  W16 Stefano Leone            7.0 ->     8.0     87.5% ->  100.0%  *
+  Minimo                      7.0 ->     7.0     43.4% ->   52.0%
+  Somma                    1287.8 ->  1321.0
+
+--- Orario di riferimento finale (verifica Fase 3) ---
+
+================================================================
+FASE 3 - VERIFICA | Caso B (sorgente bozza: llm-refined)
+================================================================
+[OK] Vincoli hard: TUTTI rispettati (piano matematicamente valido).
+
+  >> METRICHE DI EQUITA' (fairness metrics) | ASSOLUTA vs NORMALIZZATA (%):
+                               ASSOLUTA   NORM. (%)
+     Soddisfazione totale        1321.0           -
+     Media per lavoratore         66.05       73.6%
+     Minimo (peggiore)             13.0       52.0%  [W05 Andrea Esposito]
+     Massimo (migliore)            40.0      100.0%  [W03 Luca Ferrari]
+     Scarto max-min               118.0       48.0%  (piu' basso = piu' equo)
+     Deviazione standard          33.02       16.1%
+
+  >> LAVORATORE PIU' SVANTAGGIATO (input Fase 4, su scala NORMALIZZATA):
+     W05 (Andrea Esposito) = 52.0% del proprio massimo (13.0 su 25.0)
+
+  Classifica per soddisfazione NORMALIZZATA (crescente):
+     lavoratore                  norm.%  assoluta     max
+     W05 Andrea Esposito          52.0%      13.0    25.0  <-- meno soddisfatto
+     W18 Gianni Serra             52.0%      13.0    25.0
+     W01 Marco Rossi              52.8%      66.0   125.0
+     W14 Roberto Ferrara          52.8%      66.0   125.0
+     W17 Laura Mancini            56.5%      70.6   125.0
+     W06 Chiara Romano            65.9%      82.4   125.0
+     W11 Alessandro Conti         65.9%      82.4   125.0
+     W02 Giulia Bianchi           68.0%     102.0   150.0
+     W19 Paola Costa              68.8%      86.0   125.0
+     W15 Monica Cattaneo          70.2%      87.8   125.0
+     W09 Davide Greco             72.0%      54.0    75.0
+     W10 Elena Marino             72.0%      90.0   125.0
+     W04 Sara Russo               76.3%      95.4   125.0
+     W13 Simone Gallo             76.3%      95.4   125.0
+     W12 Valentina Bruno          87.5%       7.0     8.0
+     W07 Matteo Colombo           90.7%      68.0    75.0
+     W20 Fabio Martini            92.0%      69.0    75.0
+     W03 Luca Ferrari            100.0%      40.0    40.0
+     W08 Francesca Ricci         100.0%     125.0   125.0
+     W16 Stefano Leone           100.0%       8.0     8.0
+zed_preferences_case_B.py
+  Codice bozza (LLM)      : draft_code_case_B.txt
+  Bozza schedulazione     : schedule_case_B.csv
+  Codice finale (LLM)     : final_code_case_B.txt
+  Orario finale           : schedule_case_B_final.csv
+  Minimo equita'          : 54.2 -> 13.0

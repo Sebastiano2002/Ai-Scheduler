@@ -1,0 +1,133 @@
+def build_model():
+    model = cp_model.CpModel()
+    x = {(w, d, s): model.NewBoolVar(f"x_{w}_{d}_{s}")
+          for w in WORKER_IDS for d in range(NUM_DAYS) for s in SHIFT_CODES}
+
+    # Vincolo 1: Max 1 turno al giorno per lavoratore
+    for w in WORKER_IDS:
+        for d in range(NUM_DAYS):
+            model.AddAtMostOne(x[(w, d, s)] for s in SHIFT_CODES)
+
+    # Vincolo 2: ESATTAMENTE 25 turni/mese per lavoratore (pesati)
+    for w in WORKER_IDS:
+        model.Add(cp_model.LinearExpr.sum([SHIFT_WEIGHT[s] * x[(w, d, s)]
+                                           for d in range(NUM_DAYS) for s in SHIFT_CODES]) == 25)
+
+    # Vincolo 3: Divieto assoluto Notte(d)->Mattina(d+1)
+    for w in WORKER_IDS:
+        for d in range(NUM_DAYS - 1):
+            model.Add(x[(w, d, 'N')] + x[(w, d + 1, 'M')] <= 1)
+
+    # Vincolo 5: Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE
+    for w in WORKER_IDS:
+        for d in range(NUM_DAYS):
+            for k in range(1, 3):
+                if d + k < NUM_DAYS:
+                    for s in SHIFT_CODES:
+                        model.Add(x[(w, d, 'N')] + x[(w, d + k, s)] <= 1)
+
+    # Vincolo 6: Almeno 1 giorno di riposo a settimana (per ogni finestra di 7 giorni)
+    for w in WORKER_IDS:
+        for t in range(NUM_DAYS - 6):
+            finestra = range(t, t + 7)
+            model.Add(cp_model.LinearExpr.sum([x[(w, d, s)]
+                                                for d in finestra for s in SHIFT_CODES]) <= 6)
+
+    # Vincolo 1 (reiterato per chiarezza): Max 36 ore settimanali per lavoratore
+    for w in WORKER_IDS:
+        for t in range(NUM_DAYS - 6):
+            finestra = range(t, t + 7)
+            model.Add(cp_model.LinearExpr.sum([SHIFT_HOURS[s] * x[(w, d, s)]
+                                                for d in finestra for s in SHIFT_CODES]) <= 36)
+
+    # Vincolo: Turni vietati
+    for w in WORKER_IDS:
+        for s in FORBIDDEN_SHIFTS[w]:
+            for d in range(NUM_DAYS):
+                model.Add(x[(w, d, s)] == 0)
+
+    # Vincolo: Caso A: almeno 2 lavoratori assegnati a OGNI turno di OGNI giorno.
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            model.Add(cp_model.LinearExpr.sum([x[(w, d, s)] for w in WORKER_IDS]) >= 2)
+
+    return model, x
+
+# --- FASE A: warm-start. STESSI vincoli hard (25 esatto), ma obiettivo =
+#     MASSIMIZZA la somma pesata dei turni. La guida dell'LP spinge a riempire
+#     fino a 25 e trova in pochi secondi un assetto FATTIBILE con tutti a 25,
+#     da usare come hint per la FASE B. (Senza questo obiettivo la sola
+#     feasibility del modello esatto puo' richiedere oltre 2 minuti.) ---
+model_a, x_a = build_model()
+model_a.Maximize(cp_model.LinearExpr.sum([SHIFT_WEIGHT[s] * x_a[(w, d, s)]
+                     for w in WORKER_IDS for d in range(NUM_DAYS) for s in SHIFT_CODES]))
+solver_a = cp_model.CpSolver()
+solver_a.parameters.max_time_in_seconds = max(20.0, MAX_TIME * 0.4)
+solver_a.parameters.num_search_workers = 8
+solver_a.parameters.log_search_progress = False
+status_a = solver_a.Solve(model_a)
+warm = None
+if status_a in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    warm = {key: int(solver_a.Value(var)) for key, var in x_a.items()}
+
+# --- FASE B: modello reale con HINT dalla FASE A ---
+model, x = build_model()
+if warm is not None:
+    for key, var in x.items():
+        model.AddHint(var, warm[key])
+
+obiettivo = []
+# (a) Soddisfazione + penalita' per i GIORNI INDESIDERATI (ferie).
+for w in WORKER_IDS:
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            peso = int(round(PREFERENCES[w]['satisfaction_weights'][s] * 10))
+            if d in UNDESIRED_DAYS[w]:
+                peso -= int(round(UNDESIRED_DAY_PENALTY * 10))
+            obiettivo.append(peso * x[(w, d, s)])
+
+# (b) EQUITA' (Fairness-Oriented Allocation).
+# --- bilanciamento delle Notti tra lavoratori ---
+night_counts = []
+for w in WORKER_IDS:
+    nc = model.NewIntVar(0, NUM_DAYS, f"nights_{w}")
+    model.Add(nc == cp_model.LinearExpr.sum([x[(w, d, 'N')] for d in range(NUM_DAYS)]))
+    night_counts.append(nc)
+max_n = model.NewIntVar(0, NUM_DAYS, "max_nights")
+min_n = model.NewIntVar(0, NUM_DAYS, "min_nights")
+model.AddMaxEquality(max_n, night_counts)
+model.AddMinEquality(min_n, night_counts)
+obiettivo.append(-int(round(NIGHT_BALANCE_PENALTY * 10)) * (max_n - min_n))
+
+# --- bilanciamento delle VIOLAZIONI di ferie tra lavoratori ---
+violation_counts = []
+for w in WORKER_IDS:
+    vc = model.NewIntVar(0, NUM_DAYS, f"viol_{w}")
+    model.Add(vc == cp_model.LinearExpr.sum([x[(w, d, s)] for d in UNDESIRED_DAYS[w] for s in SHIFT_CODES]))
+    violation_counts.append(vc)
+max_v = model.NewIntVar(0, NUM_DAYS, "max_viol")
+min_v = model.NewIntVar(0, NUM_DAYS, "min_viol")
+model.AddMaxEquality(max_v, violation_counts)
+model.AddMinEquality(min_v, violation_counts)
+obiettivo.append(-int(round(UNDESIRED_BALANCE_PENALTY * 10)) * (max_v - min_v))
+
+model.Maximize(cp_model.LinearExpr.sum(obiettivo))
+solver = cp_model.CpSolver()
+solver.parameters.max_time_in_seconds = max(15.0, MAX_TIME * 0.6)
+solver.parameters.num_search_workers = 8
+solver.parameters.log_search_progress = False
+status = solver.Solve(model)
+
+# --- OUTPUT: dalla soluzione della FASE B ---
+RESULT_SCHEDULE = {}
+for w in WORKER_IDS:
+    RESULT_SCHEDULE[w] = {}
+    for d in range(NUM_DAYS):
+        code = None
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            for s in SHIFT_CODES:
+                if solver.Value(x[(w, d, s)]) == 1:
+                    code = s
+                    break
+        RESULT_SCHEDULE[w][d] = code
+SOLVER_STATUS = solver.StatusName(status)

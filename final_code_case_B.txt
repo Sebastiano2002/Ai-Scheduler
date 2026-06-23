@@ -1,0 +1,111 @@
+def build_model():
+    model = cp_model.CpModel()
+    x = {(w, d, s): model.NewBoolVar(f"x_{w}_{d}_{s}")
+          for w in WORKER_IDS for d in range(NUM_DAYS) for s in SHIFT_CODES}
+
+    # Vincolo 3a: Max 1 turno al giorno per lavoratore
+    for w in WORKER_IDS:
+        for d in range(NUM_DAYS):
+            model.AddAtMostOne(x[(w, d, s)] for s in SHIFT_CODES)
+
+    # Vincolo 2: ESATTAMENTE 25 turni/mese per lavoratore, conteggiati col peso
+    for w in WORKER_IDS:
+        model.Add(cp_model.LinearExpr.sum([SHIFT_WEIGHT[s] * x[(w, d, s)]
+                                           for d in range(NUM_DAYS) for s in SHIFT_CODES]) == 25)
+
+    # Vincolo 1: Max 36 ore settimanali per lavoratore (per ogni finestra di 7 giorni consecutivi).
+    # Vincolo 6: Almeno 1 giorno di riposo a settimana (per ogni finestra di 7 giorni: <=6 lavorati).
+    for w in WORKER_IDS:
+        for t in range(NUM_DAYS - 6):      # finestre di 7 giorni: t, t+1, ..., t+6
+            finestra = range(t, t + 7)
+            model.Add(cp_model.LinearExpr.sum([SHIFT_HOURS[s] * x[(w, d, s)]
+                                                for d in finestra for s in SHIFT_CODES]) <= 36)
+            model.Add(cp_model.LinearExpr.sum([x[(w, d, s)]
+                                                for d in finestra for s in SHIFT_CODES]) <= 6)
+
+    # Vincolo 3b: Divieto ASSOLUTO solo della catena Notte(d)->Mattina(d+1).
+    for w in WORKER_IDS:
+        for d in range(NUM_DAYS - 1):      # NUM_DAYS - 1, NON NUM_DAYS
+            model.Add(x[(w, d, 'N')] + x[(w, d + 1, 'M')] <= 1)
+
+    # Vincolo 5: Dopo OGNI turno di Notte: 2 giorni di riposo TOTALE (nessun turno in d+1 e d+2).
+    for w in WORKER_IDS:
+        for d in range(NUM_DAYS):
+            for k in range(1, 3):          # k=1 e k=2 (i due giorni di riposo)
+                if d + k < NUM_DAYS:       # INDISPENSABILE: verifica che il giorno esista
+                    for s in SHIFT_CODES:
+                        model.Add(x[(w, d, 'N')] + x[(w, d + k, s)] <= 1)
+
+    # Vincolo: TURNI VIETATI
+    for w in WORKER_IDS:
+        for s in FORBIDDEN_SHIFTS[w]:
+            for d in range(NUM_DAYS):
+                model.Add(x[(w, d, s)] == 0)
+
+    # Vincolo Caso B: staffing
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            # Almeno 1 lavoratore specializzato per turno
+            model.Add(cp_model.LinearExpr.sum([x[(w, d, s)] for w in SPECIALIZED_IDS]) >= 1)
+            # Almeno 3 lavoratori totali per turno
+            model.Add(cp_model.LinearExpr.sum([x[(w, d, s)] for w in WORKER_IDS]) >= 3)
+
+    return model, x
+
+model, x = build_model()
+
+# WARM-START dalla schedule corrente: indispensabile, senza l'hint il modello
+# esatto ==25 puo' restare UNKNOWN entro il tempo limite.
+for key, var in x.items():
+    if key in CURRENT_ASSIGN:
+        model.AddHint(var, CURRENT_ASSIGN[key])
+
+# Soddisfazione scalata per lavoratore (STESSO modello di soddisfazione: pesi
+# turno + penalita' per i giorni indesiderati).
+sat = {}
+for w in WORKER_IDS:
+    terms = []
+    for d in range(NUM_DAYS):
+        for s in SHIFT_CODES:
+            peso = int(round(PREFERENCES[w]['satisfaction_weights'][s] * SATISFACTION_SCALE))
+            if d in UNDESIRED_DAYS[w]:
+                peso -= int(round(UNDESIRED_DAY_PENALTY * SATISFACTION_SCALE))
+            terms.append(peso * x[(w, d, s)])
+    sat[w] = cp_model.LinearExpr.sum(terms)
+
+# Pavimenti dei lavoratori gia' fissati (leximin), in scala NORMALIZZATA:
+# norm(w) >= floor/NORM_SCALE  <=>  sat[w]*NORM_SCALE >= floor*SAT_MAX_SCALED[w].
+for w, floor in LOCKED_FLOORS.items():
+    model.Add(sat[w] * NORM_SCALE >= floor * SAT_MAX_SCALED[w])
+
+# MAX-MIN NORMALIZZATO: massimizza il minimo della soddisfazione normalizzata tra
+# i lavoratori LIBERI. z e' in unita' di NORM_SCALE (z=1000 -> 100%). Il vincolo
+# z <= norm(w) = sat[w]/SAT_MAX_SCALED[w] si linearizza moltiplicando in croce
+# (SAT_MAX_SCALED[w] e' una costante positiva):
+z = model.NewIntVar(-100000, 100000, 'z_min_norm')
+for w in FREE_WORKERS:
+    model.Add(z * SAT_MAX_SCALED[w] <= sat[w] * NORM_SCALE)
+# Tie-breaker: a parita' di minimo normalizzato, massimizza la soddisfazione
+# assoluta totale. BIG e' grande cosi' che il minimo normalizzato resti l'obiettivo
+# DOMINANTE (1 unita' di z vale piu' di tutta la somma assoluta).
+BIG = 1000000
+model.Maximize(z * BIG + cp_model.LinearExpr.sum([sat[w] for w in WORKER_IDS]))
+
+solver = cp_model.CpSolver()
+solver.parameters.max_time_in_seconds = MAX_TIME
+solver.parameters.num_search_workers = 8
+solver.parameters.log_search_progress = False
+status = solver.Solve(model)
+
+RESULT_SCHEDULE = {}
+for w in WORKER_IDS:
+    RESULT_SCHEDULE[w] = {}
+    for d in range(NUM_DAYS):
+        code = None
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            for s in SHIFT_CODES:
+                if solver.Value(x[(w, d, s)]) == 1:
+                    code = s
+                    break
+        RESULT_SCHEDULE[w][d] = code
+SOLVER_STATUS = solver.StatusName(status)
