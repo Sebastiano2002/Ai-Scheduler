@@ -1,29 +1,13 @@
 """
 Fase1_workers_agent.py
-================
+======================
 Fase 1 - Workers Agent.
 
-Questo script implementa l'agente che:
-    1. legge le preferenze dei lavoratori espresse in linguaggio naturale
-       (file 'worker_preferences.txt');
-    2. costruisce un prompt che chiede all'LLM di formalizzarle in un
-       dizionario Python strutturato 'WORKER_PREFERENCES';
-    3. usa il motore della Fase 0 (AgentExecutor.run_with_retry) per generare
-       ed eseguire in sicurezza il codice prodotto dall'LLM;
-    4. salva il risultato in 'formalized_preferences_case_A.py' /
-       'formalized_preferences_case_B.py'.
-
-L'output formalizzato distingue ESPLICITAMENTE due strutture parallele:
-    - HARD_CONSTRAINTS : vincoli inderogabili (istituzionali globali +
-      per-lavoratore: turni assolutamente vietati sul TIPO di turno);
-    - SOFT_CONSTRAINTS : preferenze per lavoratore (turni_preferiti/indesiderati,
-      giorni_indesiderati = richieste di ferie, flexibility_score) con il modello
-      di soddisfazione (satisfaction_weights) usabile nella funzione obiettivo
-      del modello OR-Tools della Fase 2.
-
-Esecuzione:
-    Impostare la variabile d'ambiente GEMINI_API_KEY e lanciare:
-        python Fase1_workers_agent.py
+Legge le preferenze dei lavoratori in linguaggio naturale, le invia all'LLM
+per formalizzarle in un dizionario Python strutturato (WORKER_PREFERENCES),
+e salva l'output in 'formalized_preferences_case_X.py' con due strutture
+parallele: HARD_CONSTRAINTS (vincoli inderogabili) e SOFT_CONSTRAINTS
+(preferenze + modello di soddisfazione).
 """
 
 import pprint
@@ -39,18 +23,14 @@ import input_data
 PREFERENCES_FILE = "worker_preferences.txt"
 
 
-# ---------------------------------------------------------------------------
-# LETTURA DELLE PREFERENZE TESTUALI
-# ---------------------------------------------------------------------------
+
 def load_preferences_text(path=PREFERENCES_FILE):
     """Legge l'intero file di preferenze in linguaggio naturale."""
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 
-# ---------------------------------------------------------------------------
-# COSTRUZIONE DEL PROMPT PER L'LLM
-# ---------------------------------------------------------------------------
+
 def build_prompt(case_label, workers, preferences_text):
     """
     Costruisce il prompt che chiede all'LLM di trasformare le preferenze
@@ -201,26 +181,9 @@ che definisca `WORKER_PREFERENCES`.
     return prompt
 
 
-# ---------------------------------------------------------------------------
-# SALVATAGGIO DELL'OUTPUT FORMALIZZATO
-# ---------------------------------------------------------------------------
-def split_hard_soft(worker_preferences):
-    """
-    Scompone il dizionario per-lavoratore prodotto dall'LLM nelle due strutture
-    parallele richieste dal progetto:
 
-        HARD_CONSTRAINTS = {
-            "institutional": {... regole globali da input_data ...},
-            "per_worker": {wid: {"nome": ...,
-                                 "turni_vietati": [...]}, ...},
-        }
-        SOFT_CONSTRAINTS = {wid: {"nome": ...,
-                                  "turni_preferiti": [...],
-                                  "turni_indesiderati": [...],
-                                  "giorni_indesiderati": [...],
-                                  "flexibility_score": ...,
-                                  "satisfaction_weights": {...}}, ...}
-    """
+def split_hard_soft(worker_preferences):
+    """Scompone il dizionario LLM in due strutture: HARD_CONSTRAINTS e SOFT_CONSTRAINTS."""
     hard_per_worker = {}
     soft = {}
 
@@ -243,20 +206,14 @@ def split_hard_soft(worker_preferences):
         }
 
     hard = {
-        # Regole istituzionali globali (unica fonte di verita': input_data).
         "institutional": dict(input_data.HARD_CONSTRAINTS),
-        # Vincoli hard estratti dal linguaggio naturale, per lavoratore.
         "per_worker": hard_per_worker,
     }
     return hard, soft
 
 
 def save_formalized(case_label, worker_preferences):
-    """
-    Serializza le preferenze formalizzate in un file Python importabile
-    'formalized_preferences_case_X.py', con DUE strutture parallele esplicite:
-    HARD_CONSTRAINTS e SOFT_CONSTRAINTS.
-    """
+    """Salva le preferenze formalizzate in 'formalized_preferences_case_X.py'."""
     out_path = f"formalized_preferences_case_{case_label}.py"
     timestamp = datetime.datetime.now().isoformat(timespec="seconds")
 
@@ -296,14 +253,9 @@ def save_formalized(case_label, worker_preferences):
     return out_path
 
 
-# ---------------------------------------------------------------------------
-# FORMALIZZAZIONE DI UN SINGOLO USE CASE
-# ---------------------------------------------------------------------------
+
 def formalize_case(executor, case_label, preferences_text):
-    """
-    Esegue l'intero flusso per un use case: prompt -> LLM -> esecuzione sicura
-    -> salvataggio.
-    """
+    """Esegue il flusso completo per un use case: prompt -> LLM -> validazione -> salvataggio."""
     use_case = input_data.USE_CASES[case_label]
     workers = use_case["workers"]
 
@@ -314,7 +266,6 @@ def formalize_case(executor, case_label, preferences_text):
 
     prompt = build_prompt(case_label, workers, preferences_text)
 
-    # Il codice generato dovra' popolare 'WORKER_PREFERENCES' in questo dizionario.
     context_vars = {}
     successo, risultato = executor.run_with_retry(prompt, context_vars=context_vars)
 
@@ -329,10 +280,7 @@ def formalize_case(executor, case_label, preferences_text):
               f"'WORKER_PREFERENCES' valido per lo Use Case {case_label}.")
         return None
 
-    # --- Validazione Pydantic dell'output strutturato ---
-    # Il dizionario generato dall'LLM viene validato con il modello
-    # AllWorkerPreferences (codici turno ammessi, flexibility_score in [0, 1],
-    # coerenza tra preferenze e pesi di soddisfazione).
+    # Validazione Pydantic dell'output generato dall'LLM.
     try:
         AllWorkerPreferences.from_raw_dict(worker_preferences)
         print(f"[+] Validazione Pydantic superata per lo Use Case {case_label}.")
@@ -345,9 +293,7 @@ def formalize_case(executor, case_label, preferences_text):
     return save_formalized(case_label, worker_preferences)
 
 
-# ---------------------------------------------------------------------------
-# MAIN: esegue la formalizzazione per ENTRAMBI gli use case
-# ---------------------------------------------------------------------------
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(
@@ -359,7 +305,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # L'inferenza avviene via Google Gemini 2.5 Flash: richiede GEMINI_API_KEY.
+
     preferences_text = load_preferences_text()
     executor = AgentExecutor()
 

@@ -1,0 +1,726 @@
+% ===========================================================================
+%  RELAZIONE TECNICA FINALE - PROGETTO "SmartScheduler"
+%  Short Relation - Approccio neuro-simbolico per lo scheduling ospedaliero
+%
+%  Per compilare:  pdflatex Relazione_SmartScheduler.tex  (x2 per i riferimenti)
+%  Pacchetti richiesti: babel(italian), booktabs, geometry, graphicx, xcolor,
+%  listings, amsmath, hyperref, caption, float.
+% ===========================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[italian]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+% ---- Stile per i blocchi di codice Python / OR-Tools ----
+\definecolor{codegray}{rgb}{0.95,0.95,0.95}
+\definecolor{codekw}{rgb}{0.0,0.3,0.6}
+\definecolor{codecomment}{rgb}{0.3,0.55,0.3}
+\definecolor{codestr}{rgb}{0.6,0.1,0.1}
+\lstdefinestyle{py}{
+  language=Python,
+  backgroundcolor=\color{codegray},
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecomment}\itshape,
+  stringstyle=\color{codestr},
+  numbers=left, numberstyle=\tiny\color{gray}, numbersep=6pt,
+  breaklines=true, frame=single, framesep=4pt, captionpos=b,
+  showstringspaces=false, tabsize=2,
+}
+\lstset{style=py}
+
+\title{\textbf{SmartScheduler}\\[0.3em]
+\large Un sistema multi-agente neuro-simbolico per la pianificazione\\
+equa dei turni ospedalieri\\[0.6em]
+\normalsize Relazione Tecnica Finale (\emph{Short Relation})}
+\author{Team di progetto --- Corso di Intelligenza Artificiale}
+\date{Giugno 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+La pianificazione dei turni del personale sanitario appartiene alla classe dei
+\emph{Nurse Rostering Problems} (NRP), NP-hard nella forma generale: richiede di
+soddisfare vincoli istituzionali rigidi (limiti orari, copertura minima, riposi
+obbligatori) e, al contempo, le preferenze personali dei lavoratori, spesso in conflitto
+tra loro. Questo documento presenta \textbf{SmartScheduler}, un sistema multi-agente
+sviluppato come progetto per il corso di Intelligenza Artificiale, che affronta il
+problema con un'architettura \emph{neuro-simbolica}. Un LLM (Google Gemini~2.5~Flash)
+interpreta le preferenze espresse in linguaggio naturale e genera codice di Constraint
+Programming; un risolutore esatto (CP-SAT, OR-Tools) calcola la soluzione; un verificatore
+deterministico indipendente ne certifica la conformità ai vincoli. Il sistema si articola
+in quattro fasi --- formalizzazione delle preferenze, generazione della bozza, verifica dei
+vincoli, raffinamento dell'equità --- e adotta un criterio \emph{leximin} su soddisfazione
+normalizzata per migliorare iterativamente la condizione del lavoratore più svantaggiato.
+Sui due casi di studio previsti dalla traccia (Caso~A: 13~lavoratori omogenei; Caso~B:
+13~standard + 7~specializzati), il sistema produce piani conformi a tutti i vincoli hard e
+porta la soddisfazione normalizzata del lavoratore peggiore dal 44\% al 52\% (Caso~A) e
+dal 43\% al 52\% (Caso~B), senza ridurre il benessere collettivo.
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ===========================================================================
+\section{Introduzione}
+% ===========================================================================
+
+Il problema affrontato da SmartScheduler presenta una tensione intrinseca: i vincoli
+istituzionali (massimo 36~ore settimanali, esattamente 25~turni pesati al mese, copertura
+minima per turno, riposi obbligatori post-notte) restringono fortemente lo spazio delle
+soluzioni ammissibili, mentre le preferenze dei lavoratori --- espresse in linguaggio
+naturale, con gradi di flessibilità diversi --- richiedono un'interpretazione semantica
+che un modello matematico da solo non può fornire.
+
+L'architettura di SmartScheduler separa nettamente queste due esigenze affidandole a
+componenti diverse. L'LLM (Google Gemini~2.5~Flash) opera dove il linguaggio naturale è
+protagonista: nella Fase~1 interpreta le descrizioni testuali dei lavoratori e le traduce
+in strutture dati validate (turni vietati per motivi medici, pesi di soddisfazione per
+tipo di turno, punteggi di flessibilità); nella Fase~2 genera il codice di un modello CP-SAT che codifica vincoli e
+funzione obiettivo. La correttezza della soluzione non dipende però dall'LLM: il
+risolutore CP-SAT (Fase~2) trova la soluzione ottimale nel rispetto dei vincoli, e un
+verificatore deterministico (Fase~3) ricontrolla ogni vincolo da capo, in modo indipendente
+dal builder che ha costruito il modello. Se anche una sola violazione viene rilevata, il
+piano è respinto. La Fase~4 raffina iterativamente l'equità con criterio \emph{leximin}:
+una prima chiamata all'LLM genera un modello CP-SAT parametrico che massimizza il minimo
+della soddisfazione normalizzata tra i lavoratori; le iterazioni successive ri-eseguono lo
+stesso codice aggiornando solo i parametri (pavimenti fissati, lavoratori ancora da
+ottimizzare, warm-start dalla schedule corrente), senza ulteriori chiamate all'LLM.
+
+Questa separazione --- l'LLM formalizza, il solutore decide, il verificatore certifica ---
+è il principio di design fondamentale del sistema: sfrutta la flessibilità del modello
+linguistico senza delegargli responsabilità che richiedono garanzie formali.
+
+% [FIGURA 1 -- DA INSERIRE]
+% Inserire qui uno schema architetturale a blocchi dell'intera pipeline:
+% un riquadro per ciascuna delle 4 fasi (Workers Agent, Drafting Agent,
+% Verification Agent, Refinement Agent), con frecce orizzontali che mostrano
+% il flusso dei dati (preferenze testuali -> dizionario formalizzato ->
+% codice cp_model -> ScheduleResult -> report di verifica -> ciclo di
+% raffinamento). Evidenziare con un colore diverso i moduli "neurali" (LLM)
+% rispetto a quelli "simbolici" (solver / verifier deterministico).
+\begin{figure}[H]
+\centering
+\fbox{\parbox{0.9\textwidth}{\centering\vspace{2.2cm}
+\textit{[Figura 1] Schema architetturale a blocchi della pipeline a 4 fasi:\\
+moduli neurali (LLM) vs. moduli simbolici (CP-SAT / Verifier).}
+\vspace{2.2cm}}}
+\caption{Architettura neuro-simbolica di SmartScheduler.}
+\label{fig:arch}
+\end{figure}
+
+\noindent
+La relazione è organizzata come segue. La Sezione~\ref{sec:design} descrive le scelte di
+design del software e dell'infrastruttura. La Sezione~\ref{sec:fasi} analizza in dettaglio
+le quattro fasi della pipeline, motivando le decisioni implementative. La
+Sezione~\ref{sec:risultati} presenta i risultati quantitativi sui due casi di studio.
+Le Sezioni~\ref{sec:futuro} e~\ref{sec:conclusioni} chiudono con gli sviluppi futuri e le
+conclusioni.
+
+% ===========================================================================
+\section{Struttura del sistema e scelte di design}
+\label{sec:design}
+% ===========================================================================
+
+\subsection{Il modello dei dati: un'unica fonte di verità}
+
+Il fondamento dell'intero sistema è il modulo \texttt{input\_data.py}, che codifica come
+costanti Python tutti gli elementi invarianti del problema: i tre turni giornalieri
+(Mattina 08--14, Pomeriggio 14--20, Notte 20--08), i vincoli hard istituzionali, l'orizzonte
+temporale (dal 7~dicembre~2026 al 6~gennaio~2027, \textbf{31~giorni}), i giorni festivi e
+l'anagrafica dei lavoratori per i due use case. Concentrare questi dati in un solo modulo
+garantisce che tutte le fasa successive leggano da \emph{un'unica fonte di verità},
+eliminando il rischio di incoerenze tra agenti.
+
+Il turno di \textbf{Notte} richiede un trattamento specifico: avendo durata
+12~ore (20:00$\to$08:00 del giorno seguente), esso è trattato come ``turno doppio''
+($\text{peso\_turni}=2$, $\text{durata\_ore}=12$), mentre Mattina e Pomeriggio valgono~1 e
+durano 6~ore. Questo dettaglio è cruciale: il vincolo dei ``25 turni al mese'' è in realtà
+una somma \emph{pesata} ($\sum \text{peso} \cdot x = 25$), coerentemente con la traccia che
+attribuisce alla notte un carico di lavoro doppio.
+
+\begin{table}[H]
+\centering
+\caption{Parametri istituzionali del problema (vincoli hard globali).}
+\label{tab:hard}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Parametro} & \textbf{Valore} & \textbf{Significato} \\
+\midrule
+Max ore settimanali        & 36   & Tetto orario su ogni finestra di 7 giorni \\
+Turni mensili (pesati)     & 25   & Carico esatto per lavoratore sul mese \\
+Max turni/giorno           & 1    & Al più un turno per lavoratore al giorno \\
+Catena vietata             & N$\to$M & Notte seguita da Mattina del giorno dopo \\
+Riposi dopo notte          & 2    & Due giorni liberi obbligatori post-notte \\
+Riposo settimanale minimo  & 1    & Almeno un giorno libero ogni 7 \\
+Orizzonte                  & 31 gg & 07/12/2026 -- 06/01/2027 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Validazione strutturata con Pydantic}
+
+L'output di un LLM è intrinsecamente non affidabile sul piano strutturale. Per questo, le
+preferenze formalizzate nella Fase~1 non vengono accettate ``a scatola chiusa'', ma passano
+attraverso uno strato di validazione costruito con \textbf{Pydantic} (modulo
+\texttt{models.py}). I modelli \texttt{WorkerHardConstraints} e \texttt{WorkerSoftConstraints}
+distinguono esplicitamente, già a livello di tipo, i vincoli hard del singolo lavoratore
+(es. divieto medico di turni notturni) dalle preferenze soft.
+
+Oltre ai controlli di base (codici turno ammessi $\in\{M,P,N\}$, date in formato ISO,
+\texttt{flexibility\_score} $\in[0,1]$), sono stati implementati \textbf{validatori custom}
+che prevengono incoerenze logiche che un LLM potrebbe introdurre:
+
+\begin{itemize}[noitemsep]
+  \item un turno marcato come \emph{preferito} deve avere peso di soddisfazione positivo;
+  \item un turno \emph{indesiderato} deve avere peso negativo (\texttt{@model\_validator});
+  \item un turno \emph{vietato} (hard) non può comparire né tra i preferiti né tra gli
+        indesiderati (sarebbe una contraddizione tra il livello hard e quello soft).
+\end{itemize}
+
+Questo garantisce che i dati passati al modello matematico siano sempre puliti, coerenti e
+semanticamente sensati \emph{prima} ancora di raggiungere il solutore.
+
+\subsection{Infrastruttura di esecuzione: il ``Ponte di Comando''}
+
+Il modulo \texttt{llm\_engine.py} implementa la classe \texttt{AgentExecutor}, lo strato
+trasversale che tutte le fasi condividono per dialogare con l'LLM. Le sue tre responsabilità
+sono: (1)~inviare il prompt e \textbf{estrarre il solo blocco di codice Python} generato
+(via espressione regolare su \texttt{\`{}\`{}\`{}python}); (2)~\textbf{eseguirlo in sicurezza}
+con \texttt{safe\_execute}; (3)~in caso di errore, \textbf{reinviarlo all'LLM per
+l'auto-correzione} (\texttt{run\_with\_retry}, fino a 3~tentativi).
+
+Quest'ultimo punto è la quintessenza dell'approccio \emph{agentic}: quando il codice generato
+solleva un'eccezione, il traceback completo viene catturato e inserito in un nuovo prompt che
+chiede al modello di analizzare l'errore e produrre una versione corretta. Il sistema, di
+fatto, ``debugga sé stesso''.
+
+% [FIGURA 2 -- DA INSERIRE]
+% Inserire un diagramma di flusso del ciclo run_with_retry: nodo "Genera codice"
+% -> "Esegui (safe_execute)" -> rombo decisionale "Successo?" -> se SI "Ritorna
+% risultato + salva last_code"; se NO -> "Costruisci prompt di correzione con il
+% traceback" -> torna a "Genera codice". Mostrare il contatore max_retries=3.
+\begin{figure}[H]
+\centering
+\fbox{\parbox{0.8\textwidth}{\centering\vspace{1.8cm}
+\textit{[Figura 2] Diagramma di flusso del ciclo di auto-correzione\\
+\texttt{run\_with\_retry}: genera $\to$ esegue $\to$ (se errore) reinvia il traceback all'LLM.}
+\vspace{1.8cm}}}
+\caption{Ciclo agentic di generazione ed auto-correzione del codice.}
+\label{fig:retry}
+\end{figure}
+
+Una nota tecnica non banale riguarda \texttt{safe\_execute}: il codice generato viene eseguito
+in un \emph{unico} namespace ottenuto fondendo \texttt{globals()} con le variabili di contesto
+pre-caricate. Questa scelta risolve un \texttt{NameError} sottile che si manifestava quando il
+codice LLM usava variabili (es. \texttt{x}) all'interno di \emph{comprehension} annidate: in
+Python~3 tali scope cercano i nomi solo nei globali, e mantenere due namespace separati li
+rendeva invisibili. La fusione in un solo dizionario elimina il problema alla radice.
+
+\subsection{Perché modelli in cloud e non in locale}
+
+Una decisione infrastrutturale rilevante è stata l'adozione di un LLM \textbf{in cloud}
+(Google Gemini~2.5~Flash via SDK \texttt{google-genai}) invece di un modello eseguito in
+locale. La motivazione è puramente pragmatica: \textbf{l'hardware a nostra disposizione non
+disponeva delle risorse} (in particolare memoria GPU/VRAM) necessarie a far girare in locale,
+con latenze accettabili, un modello di qualità comparabile per la generazione di codice. I
+modelli open-weight di dimensione eseguibile su hardware consumer producevano codice OR-Tools
+meno affidabile, aumentando il numero di iterazioni di auto-correzione e, di fatto, rendendo
+la pipeline più lenta e fragile.
+
+L'API remota ha però richiesto attenzioni ingegneristiche specifiche, recepite in
+\texttt{generate\_and\_extract}: gestione del \emph{rate limiting} (HTTP~429) con
+\textbf{backoff} crescente (30s, 60s, 90s), e impostazione di una \texttt{temperature} bassa
+(0.1) per rendere la generazione di codice il più deterministica e riproducibile possibile.
+Il \texttt{thinking\_budget} è stato azzerato per i prompt in cui la struttura del codice è
+già fortemente guidata, riducendo costi e latenza.
+
+\subsection{Interfaccia utente}
+
+A corredo della pipeline è stata realizzata una GUI con \texttt{customtkinter}
+(\texttt{gui.py}). L'interfaccia gestisce correttamente l'asincronia: i sottoprocessi delle
+fasi (potenzialmente lunghi, per via delle chiamate LLM e dei tempi del solutore) girano su
+\textbf{thread separati} e comunicano con il thread grafico tramite \textbf{code}
+(\texttt{queue}), così che la finestra rimanga reattiva e non si ``congeli'' durante
+l'elaborazione. È un dettaglio di fruibilità che eleva il prototipo a strumento utilizzabile.
+
+% [FIGURA 3 -- DA INSERIRE]
+% Inserire uno screenshot della GUI (customtkinter) durante l'esecuzione di un
+% caso, mostrando i pulsanti delle fasi e il pannello di log/output in tempo reale.
+\begin{figure}[H]
+\centering
+\fbox{\parbox{0.7\textwidth}{\centering\vspace{1.6cm}
+\textit{[Figura 3] Screenshot della GUI (customtkinter) con il pannello\\
+di log in tempo reale durante l'esecuzione di un caso.}
+\vspace{1.6cm}}}
+\caption{Interfaccia grafica del sistema.}
+\label{fig:gui}
+\end{figure}
+
+% ===========================================================================
+\section{Analisi delle quattro fasi}
+\label{sec:fasi}
+% ===========================================================================
+
+In questa sezione analizziamo ciascuna delle quattro fasi previste dalla traccia
+``Progetto IA'', motivando le scelte adottate per coniugare \emph{aderenza ai requisiti} ed
+\emph{efficienza computazionale}.
+
+% ---------------------------------------------------------------------------
+\subsection{Fase 1 --- Preferences Definition (Workers Agent)}
+% ---------------------------------------------------------------------------
+
+\textbf{Obiettivo della traccia.} Raccogliere le preferenze dei lavoratori espresse in
+linguaggio naturale e formalizzarle in una rappresentazione machine-readable, distinguendo
+vincoli hard (legali, copertura, ore, riposi) e soft (preferenze, desiderabilità dei turni,
+livelli di tolleranza individuale). Ogni lavoratore deve essere associato a un \emph{modello
+di soddisfazione}.
+
+\textbf{La nostra implementazione.} Il \texttt{Workers Agent} (\texttt{Fase1\_workers\_agent.py})
+legge il file \texttt{worker\_preferences.txt}, in cui ogni lavoratore descrive liberamente
+le proprie esigenze (esempi reali dal nostro dataset):
+
+\begin{quote}\small
+\emph{``[W01] Preferisco lavorare il turno di mattina perché la sera seguo dei corsi serali.
+Evito volentieri i turni di notte\dots\ Non sono disponibile il 25 dicembre.''}\\[2pt]
+\emph{``[W08] Ho una netta preferenza per i turni del mattino\dots\ Per motivi di salute non
+posso assolutamente svolgere turni di notte.''}
+\end{quote}
+
+L'LLM interpreta questi testi e produce un dizionario Python strutturato, validato da
+Pydantic. Il punto chiave di design è la \textbf{traduzione della tolleranza in pesi
+numerici}. La traccia cita i ``livelli di tolleranza individuale'' come categoria soft; noi
+li rappresentiamo con un \texttt{flexibility\_score} $\in[0,1]$, ma \emph{non} lo inseriamo
+come parametro separato nel modello OR-Tools (sarebbe un doppio conteggio). La tolleranza è
+invece \emph{incorporata nella grandezza dei pesi di soddisfazione}: per un turno indesiderato
+il peso è circa $-6\cdot(1-\text{flexibility\_score})$. Così un lavoratore rigido
+(score~0.1, come W04) riceve una penalità forte ($\approx -5.4$) se gli si assegna un turno
+sgradito, mentre uno flessibile (score~0.9, come W05) ne riceve una trascurabile. La
+distinzione si rispecchia perfettamente nei dati formalizzati: si veda la
+Tabella~\ref{tab:prefs}.
+
+\begin{table}[H]
+\centering
+\caption{Estratto delle preferenze formalizzate (Caso A): pesi di soddisfazione $M/P/N$
+e flessibilità. Pesi positivi = turno gradito, negativi = sgradito.}
+\label{tab:prefs}
+\begin{tabular}{@{}llccccl@{}}
+\toprule
+\textbf{ID} & \textbf{Nome} & \textbf{Flex.} & $w_M$ & $w_P$ & $w_N$ & \textbf{Note} \\
+\midrule
+W02 & Giulia Bianchi  & 0.2 & $+6.0$ & $-4.8$ & $0.0$  & rigida, ama il mattino \\
+W03 & Luca Ferrari    & 0.4 & $-3.6$ & $0.0$  & $+5.0$ & preferisce la notte \\
+W04 & Sara Russo      & 0.1 & $0.0$  & $+5.0$ & $-5.4$ & molto rigida \\
+W05 & Andrea Esposito & 0.9 & $0.0$  & $+1.0$ & $0.0$  & molto flessibile \\
+W08 & Francesca Ricci & 0.5 & $+5.0$ & $+4.0$ & ---    & notte \textbf{vietata} (hard) \\
+W12 & Valentina Bruno & 0.9 & $0.0$  & $0.0$  & $+1.0$ & flessibile, ama la notte \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Un'ulteriore decisione di modellazione riguarda le \textbf{richieste di ferie}
+(\texttt{giorni\_indesiderati}). La traccia parla di ``vincoli di disponibilità''; tuttavia
+trattarle come vincolo hard rischierebbe di rendere il problema \textbf{infeasible} in caso di
+emergenza di organico (es. troppe richieste sullo stesso festivo). Le abbiamo perciò
+modellate come \textbf{vincolo soft ad alta penalità} (\texttt{UNDESIRED\_DAY\_PENALTY}~$=50$):
+il solver le evita con grande forza, ma in caso estremo può comunque assegnare quel giorno
+invece di fallire. È un compromesso che privilegia la robustezza senza tradire l'intento del
+lavoratore. L'unico vincolo realmente hard a livello individuale è il divieto \emph{medico}
+(es. W08, che non può fare notti).
+
+% ---------------------------------------------------------------------------
+\subsection{Fase 2 --- Schedule Drafting (Drafting Agent)}
+% ---------------------------------------------------------------------------
+
+\textbf{Obiettivo della traccia.} Generare una bozza iniziale che soddisfi tutti i vincoli
+hard massimizzando la soddisfazione, con allocazione \emph{equa} dei turni gravosi
+(Fairness-Oriented Allocation).
+
+\textbf{La nostra implementazione.} Il \texttt{Drafting Agent}
+(\texttt{Fase2\_drafting\_agent.py}) costruisce un prompt che istruisce l'LLM a scrivere il
+modello \texttt{ortools.sat.python.cp\_model}. La variabile decisionale fondamentale è
+booleana:
+\[
+x_{w,d,s} \in \{0,1\}, \qquad
+x_{w,d,s}=1 \iff \text{il lavoratore } w \text{ lavora il giorno } d \text{ nel turno } s.
+\]
+Su questa base vengono codificati i vincoli hard, riportati in forma sintetica nel
+Listato~\ref{lst:hard}.
+
+\begin{lstlisting}[caption={Codifica dei vincoli hard in CP-SAT (estratto dal codice
+generato).},label={lst:hard}]
+# Al piu' 1 turno al giorno per lavoratore
+model.AddAtMostOne(x[(w,d,s)] for s in SHIFT_CODES)
+
+# ESATTAMENTE 25 turni/mese (pesati: la Notte vale 2)
+model.Add(sum(SHIFT_WEIGHT[s]*x[(w,d,s)] for d,s in ...) == 25)
+
+# Divieto catena Notte(d) -> Mattina(d+1)
+model.Add(x[(w,d,'N')] + x[(w,d+1,'M')] <= 1)
+
+# Dopo ogni Notte: 2 giorni di riposo totale
+for k in (1,2):
+    model.Add(x[(w,d,'N')] + x[(w,d+k,s)] <= 1)
+
+# Max 36 ore su ogni finestra scorrevole di 7 giorni
+model.Add(sum(SHIFT_HOURS[s]*x[(w,d,s)] for d in finestra) <= 36)
+
+# Copertura (Caso A): >= 2 lavoratori per ogni turno di ogni giorno
+model.Add(sum(x[(w,d,s)] for w in WORKER_IDS) >= 2)
+\end{lstlisting}
+
+Tre scelte algoritmiche meritano un commento.
+
+\paragraph{Finestre temporali scorrevoli.} I limiti ``36~ore settimanali'' e ``almeno un
+riposo a settimana'' non sono imposti su settimane di calendario fisse, ma su \emph{ogni}
+finestra di 7~giorni consecutivi (\texttt{for t in range(NUM\_DAYS-6)}). Questa formulazione,
+più forte, impedisce violazioni a cavallo di due settimane di calendario che una segmentazione
+rigida lascerebbe passare.
+
+\paragraph{Interpretazione del vincolo ``due turni consecutivi''.} La traccia vieta ``due
+turni consecutivi''. Dato il limite di 1~turno/giorno, l'unica coppia \emph{temporalmente
+contigua} a cavallo di due giorni è Notte($d$)$\to$Mattina($d{+}1$): è questa la catena vietata
+(peraltro già implicata dai due riposi post-notte). Lavorare in giorni di calendario adiacenti
+con turni \emph{diurni} è invece permesso --- ed è necessario, poiché 25~turni su 31~giorni
+renderebbero infeasible qualunque divieto di lavorare in giorni adiacenti. Questa
+interpretazione è stata verificata esplicitamente nell'agente di Fase~3.
+
+\paragraph{Equità già nella bozza.} Coerentemente con la ``Fairness-Oriented Allocation''
+della traccia, l'obiettivo della Fase~2 non massimizza solo la soddisfazione totale, ma
+include due penalità di equità \emph{deliberatamente basse} (tie-breaker) sullo \emph{scarto}
+(max$-$min) tra lavoratori del numero di notti e del numero di violazioni di ferie
+(\texttt{NIGHT\_BALANCE\_PENALTY}, \texttt{UNDESIRED\_BALANCE\_PENALTY}~$=2$). Sono volutamente
+modeste per bilanciare il carico gravoso senza stravolgere le preferenze individuali, che
+restano dominanti.
+
+\paragraph{Il warm-start in due fasi.} Una difficoltà concreta del modello è il vincolo
+\emph{esatto} $\sum \text{peso}\cdot x = 25$: è un vincolo di uguaglianza ``stretto'' che rende
+arduo per il solutore trovare una prima soluzione feasible entro il tempo limite, lasciando lo
+status su \texttt{UNKNOWN}. Per questo, il prompt del Drafting Agent guida l'LLM a una
+strategia di \textbf{warm-start}: prima si risolve un modello rilassato per ottenere un
+assegnamento di partenza, poi lo si fornisce come \emph{hint} (\texttt{model.AddHint}) al
+modello completo. Senza questo accorgimento il solutore può restare bloccato; con esso
+converge rapidamente a una soluzione \texttt{FEASIBLE}.
+
+% ---------------------------------------------------------------------------
+\subsection{Fase 3 --- Schedule Verification (Verification Agents)}
+% ---------------------------------------------------------------------------
+
+\textbf{Obiettivo della traccia.} Verificare la conformità del piano ai vincoli legali e,
+se conforme, valutarne l'equità identificando il lavoratore più svantaggiato.
+
+\textbf{La nostra implementazione.} La Fase~3 (\texttt{Fase3\_verification\_agent.py}) ospita
+due agenti distinti.
+
+Il primo, l'\textbf{Hard Constraint Verifier}, è una scelta di design fondamentale per la
+fiducia nel sistema: \textbf{non genera codice} e \textbf{non usa l'LLM}. È un controllo
+matematico \emph{deterministico} e, soprattutto, \textbf{indipendente} dal builder della
+Fase~2: ricodifica le leggi da capo e rilegge l'output del solutore. In questo modo, una
+verifica che passa è una garanzia reale e non una tautologia (il solutore che ``si certifica
+da solo''). Se rileva anche una sola violazione, produce una traccia d'errore strutturata e
+respinge il piano verso il Drafting Agent.
+
+Il secondo, il \textbf{Fairness Verifier}, viene eseguito solo su piani validi. Calcola la
+soddisfazione di ogni lavoratore e ne identifica esplicitamente il più svantaggiato. Qui si
+colloca una delle scelte concettuali più importanti del progetto: la valutazione dell'equità
+avviene su \textbf{soddisfazione normalizzata}, non assoluta.
+
+\paragraph{Perché normalizzare.} La soddisfazione assoluta di un lavoratore dipende dalla
+grandezza dei suoi pesi: chi ha preferenze ``forti'' (pesi grandi) può accumulare punteggi
+elevati, mentre un lavoratore flessibile (es. W12, con $\text{sat\_max}=8$) ha un tetto basso
+per costruzione. Confrontare i valori assoluti penalizzerebbe ingiustamente i secondi. Per
+questo definiamo la soddisfazione normalizzata come
+\[
+\text{norm}(w) = \frac{\text{sat}(w)}{\text{sat}_{\max}(w)} \in [0,1],
+\]
+dove $\text{sat}_{\max}(w)$ è la massima soddisfazione teoricamente ottenibile da $w$.
+Il ``lavoratore più svantaggiato'' è quindi quello con la \emph{percentuale} più bassa di
+appagamento rispetto al proprio potenziale --- una nozione di equità (\emph{proportional
+fairness}) molto più giusta del confronto assoluto.
+
+% [FIGURA 4 -- DA INSERIRE]
+% Inserire un grafico a barre orizzontali della classifica per soddisfazione
+% NORMALIZZATA (uno per Caso A e uno per Caso B), evidenziando in rosso la barra
+% piu' bassa (lavoratore piu' svantaggiato) che diventa l'input della Fase 4.
+\begin{figure}[H]
+\centering
+\fbox{\parbox{0.8\textwidth}{\centering\vspace{1.8cm}
+\textit{[Figura 4] Classifica per soddisfazione normalizzata (\%) dei lavoratori;\\
+in rosso il più svantaggiato, input della Fase 4.}
+\vspace{1.8cm}}}
+\caption{Distribuzione della soddisfazione normalizzata (output del Fairness Verifier).}
+\label{fig:fairness}
+\end{figure}
+
+% ---------------------------------------------------------------------------
+\subsection{Fase 4 --- Schedule Refinement (Refinement Agent)}
+% ---------------------------------------------------------------------------
+
+\textbf{Obiettivo della traccia.} Migliorare iterativamente l'equità preservando tutti i
+vincoli hard. Il criterio: migliorare la soddisfazione del lavoratore meno soddisfatto
+\emph{senza peggiorare} il minimo degli altri; iterare finché nessun ulteriore miglioramento
+è possibile.
+
+\textbf{La nostra implementazione.} Questa è la fase algoritmicamente più sofisticata. Il
+criterio della traccia è la definizione esatta dell'ottimo secondo \textbf{leximin}
+(\emph{lexicographic max-min}): si massimizza il minimo, poi --- a parità di minimo --- il
+secondo valore più basso, e così via. Il Refinement Agent reistruisce il Drafting Agent a
+scrivere \emph{una sola volta} un modello \textbf{leximin parametrico}, il cui obiettivo non è
+più la somma utilitaristica (che lasciava il peggiore ``inchiodato''), ma la
+\textbf{massimizzazione del minimo normalizzato} (Max-Min Fairness):
+\[
+\max\; z \quad\text{s.t.}\quad z \le \text{norm}(w)\;\;\forall w \in \text{FREE\_WORKERS},
+\]
+linearizzato con moltiplicazione incrociata
+($z\cdot\text{sat}_{\max}(w) \le \text{sat}(w)\cdot\text{NORM\_SCALE}$) per restare in dominio
+intero. Un \emph{tie-breaker} (con coefficiente \texttt{BIG}) massimizza in subordine la
+soddisfazione totale, mantenendo però il minimo normalizzato come obiettivo \emph{dominante}.
+
+Il ciclo (\texttt{run\_refinement\_loop}) implementa il leximin per livelli: a ogni iterazione
+fissa un \emph{pavimento} (\texttt{LOCKED\_FLOORS}) per i lavoratori già ottimizzati e
+ri-massimizza il minimo dei rimanenti (\texttt{FREE\_WORKERS}), riusando lo \emph{stesso}
+codice parametrico. La terminazione \emph{primaria} è quella della traccia (nessun ulteriore
+miglioramento possibile); il limite \texttt{max\_iterations} è una salvaguardia secondaria
+anti-loop e anti-costo (ogni iterazione è una chiamata LLM).
+
+\paragraph{Gestione del solutore ``impantanato''.} Su istanze grandi (Caso~B) il solutore può
+non dimostrare l'ottimalità di un livello entro il tempo limite. Il ciclo gestisce questa
+realtà con una strategia pragmatica osservabile nei log: se non rileva progresso, raddoppia il
+tempo per un ``Deep Dive'' (120s); se resta bloccato, \emph{forza il blocco} del livello come
+se fosse ottimale (\texttt{FORCED\_OPTIMAL}) e prosegue. È un compromesso necessario tra
+rigore teorico e praticità computazionale, che garantisce la terminazione mantenendo intatti
+tutti i vincoli hard.
+
+% ===========================================================================
+\section{Analisi dei risultati}
+\label{sec:risultati}
+% ===========================================================================
+
+Questa sezione analizza i risultati ottenuti nei due scenari operativi previsti. Prima di esaminare i dettagli dell'equità distributiva, è importante sottolineare un dato fondamentale: per entrambi i casi di studio, il modulo di verifica indipendente (Fase~3) ha certificato la totale conformità delle schedulazioni a tutti i vincoli istituzionali. Avendo quindi garantito l'ammissibilità e la validità operativa dei piani, possiamo concentrarci su come il sistema distribuisce il carico di lavoro. In particolare, valuteremo l'impatto dell'algoritmo di raffinamento iterativo basato sul criterio \emph{leximin} (Fase~4) nel migliorare le condizioni dei lavoratori.
+
+\subsection{Metriche di valutazione e significato dell'equità}
+
+Per valutare l'efficacia del sistema non basta accertarne la validità matematica. Dobbiamo capire se e quanto il raffinamento migliori la condizione dei lavoratori senza degradare la qualità complessiva. A questo scopo, mettiamo a confronto la \textbf{bozza iniziale} (generata nella Fase~2, mirata al benessere di gruppo) con il \textbf{piano finale ottimizzato} (generato nella Fase~4, focalizzato sull'equità), utilizzando tre categorie di indicatori:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Minimo normalizzato (Leximin)}: indica la percentuale di soddisfazione raggiunta dal lavoratore più svantaggiato. È la nostra metrica principale per misurare l'equità: più questo valore si alza, migliori saranno le condizioni di chi si trova nella situazione peggiore.
+  \item \textbf{Media normalizzata} e \textbf{Soddisfazione totale assoluta}: rappresentano il benessere generale del gruppo. Li monitoriamo per assicurarci che la ricerca dell'equità non vada a discapito della qualità globale della schedulazione, un rischio frequente nei sistemi troppo rigidi.
+  \item \textbf{Scarto max-min e Deviazione standard}: misurano le disuguaglianze tra i lavoratori. Quando questi valori scendono, significa che i turni e le preferenze sono distribuiti in modo più omogeneo e bilanciato tra tutti i dipendenti.
+\end{itemize}
+
+\subsection{Caso A --- 13 lavoratori omogenei}
+
+Il Caso~A definisce uno scenario omogeneo, con 13 lavoratori interscambiabili e la necessità di garantire almeno due operatori per ogni turno. La Tabella~\ref{tab:resA} illustra come evolvono le metriche di equità passando dalla bozza iniziale al piano finale ottimizzato.
+
+\begin{table}[H]
+\centering
+\caption{Caso A --- metriche di equità: bozza (Fase 2) vs. piano finale (Fase 4).}
+\label{tab:resA}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Metrica} & \textbf{Bozza} & \textbf{Finale} & \textbf{$\Delta$} \\
+\midrule
+Minimo normalizzato (leximin)   & 44.0\% & \textbf{52.0\%} & $+8.0$ p.p. \\
+Media normalizzata              & 69.6\% & 71.1\% & $+1.5$ p.p. \\
+Soddisfazione totale (assoluta) & 856.6  & 870.0  & $+13.4$ \\
+Lavoratore più svantaggiato     & W05 (44.0\%) & W05 (52.0\%) & --- \\
+Vincoli hard                    & rispettati & rispettati & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+I risultati premiano chiaramente l'approccio adottato. Il sistema ha incrementato la soddisfazione del lavoratore più in difficoltà, Andrea Esposito (W05), portandolo dal 44\% al 52\%. Questo miglioramento non ha comportato sacrifici per il resto del gruppo: la soddisfazione media è infatti salita al 71,1\% e quella totale è cresciuta, dimostrando che l'ottimizzazione ha saputo trovare un equilibrio globalmente più vantaggioso.
+
+L'uso della soddisfazione normalizzata è stato cruciale per evitare distorsioni. Poiché W05 è molto flessibile, le sue preferenze hanno un peso massimo teorico ridotto (25 punti), il che lo farebbe apparire sempre svantaggiato se guardassimo solo ai punteggi assoluti. Normalizzando il suo punteggio rispetto al potenziale individuale, siamo riusciti a misurare equamente il suo benessere rispetto agli altri colleghi, evitando di sovra-ottimizzare lavoratori che, pur con punteggi assoluti bassi, sono già molto soddisfatti del loro piano.
+
+La Tabella~\ref{tab:resA_workers} illustra chiaramente questo principio. Confrontando i valori assoluti finali, W05 (13.0 punti) potrebbe sembrare in vantaggio rispetto a W12 (7.0 punti). Tuttavia, se consideriamo il potenziale massimo individuale (25.0 per W05 contro soli 8.0 per W12, che essendo anch'essa altamente flessibile ha espresso preferenze dal peso quasi nullo), si scopre che W12 ha in realtà raggiunto l'87.5\% della propria soddisfazione ideale, mentre W05 è fermo al 52.0\% ed è, di fatto, il lavoratore più penalizzato. I dati in tabella permettono inoltre di osservare la redistribuzione in azione: per risolvere questi squilibri, i lavoratori molto avvantaggiati (come W04 o W06) hanno ceduto organicamente parte del loro surplus a beneficio dei colleghi più svantaggiati (W05, ma anche W11 che recupera oltre 20 punti percentuali), confermando in pieno la validità del criterio \emph{leximin}.
+
+\begin{table}[H]
+\centering
+\caption{Caso A --- metriche di soddisfazione individuale (ordine crescente di equità finale).}
+\label{tab:resA_workers}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}llcccccc@{}}
+\toprule
+\textbf{ID} & \textbf{Nome} & \textbf{Ass. In.} & \textbf{Ass. Fin.} & \textbf{Max} & \textbf{Norm. In.} & \textbf{Norm. Fin.} & \textbf{$\Delta$} \\
+\midrule
+W05 & Andrea Esposito  & 11.0  & 13.0  & 25.0  & 44.0\% & 52.0\% & $+8.0$ \\
+W06 & Chiara Romano    & 80.6  & 65.8  & 125.0 & 64.5\% & 52.6\% & $-11.9$ \\
+W13 & Simone Gallo     & 65.8  & 65.8  & 125.0 & 52.6\% & 52.6\% & $0.0$ \\
+W02 & Giulia Bianchi   & 90.0  & 90.0  & 150.0 & 60.0\% & 60.0\% & $0.0$ \\
+W01 & Marco Rossi      & 63.0  & 75.4  & 125.0 & 50.4\% & 60.3\% & $+9.9$ \\
+W04 & Sara Russo       & 94.2  & 78.8  & 125.0 & 75.4\% & 63.0\% & $-12.4$ \\
+W10 & Elena Marino     & 89.0  & 83.0  & 125.0 & 71.2\% & 66.4\% & $-4.8$ \\
+W11 & Alessandro Conti & 57.0  & 84.2  & 125.0 & 45.6\% & 67.4\% & $+21.8$ \\
+W09 & Davide Greco     & 57.0  & 60.0  & 75.0  & 76.0\% & 80.0\% & $+4.0$ \\
+W07 & Matteo Colombo   & 79.0  & 82.0  & 100.0 & 79.0\% & 82.0\% & $+3.0$ \\
+W12 & Valentina Bruno  & 7.0   & 7.0   & 8.0   & 87.5\% & 87.5\% & $0.0$ \\
+W03 & Luca Ferrari     & 40.0  & 40.0  & 40.0  & 100.0\% & 100.0\% & $0.0$ \\
+W08 & Francesca Ricci  & 123.0 & 125.0 & 125.0 & 98.4\% & 100.0\% & $+1.6$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Caso B --- 13 standard + 7 specializzati}
+
+Il Caso~B arricchisce lo scenario con l'eterogeneità dei ruoli: ciascun turno richiede almeno 2 operatori standard e 1 specializzato, e gli specializzati possono coprire posizioni standard (ma non viceversa). Questa asimmetria, combinata con un organico di 20 lavoratori, produce un'istanza sensibilmente più complessa rispetto al Caso~A.
+
+\begin{table}[H]
+\centering
+\caption{Caso B --- metriche di equità: bozza (Fase 2) vs. piano finale (Fase 4).}
+\label{tab:resB}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Metrica} & \textbf{Bozza} & \textbf{Finale} & \textbf{$\Delta$} \\
+\midrule
+Minimo normalizzato (leximin)        & 43.4\% & \textbf{52.0\%} & $+8.6$ p.p. \\
+Media normalizzata                   & 71.1\% & 73.6\% & $+2.5$ p.p. \\
+Soddisfazione totale (assoluta)      & 1287.8 & 1321.0 & $+33.2$ \\
+Scarto max$-$min (normalizzato)      & 56.6\% & 48.0\% & $-8.6$ p.p. \\
+Deviazione standard (normalizzata)   & 18.5\% & 16.1\% & $-2.4$ p.p. \\
+Lavoratore più svantaggiato          & W14 (43.4\%) & W05 (52.0\%) & --- \\
+Vincoli hard                         & rispettati & rispettati & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Anche in questo scenario più complesso, l'algoritmo dimostra tutta la sua solidità. Come riepilogato in Tabella~\ref{tab:resB}, il minimo normalizzato sale di 8.6 punti percentuali (dal 43.4\% al 52.0\%) e la soddisfazione totale del gruppo aumenta da 1287.8 a 1321.0. Ancora una volta, il miglioramento dell'equità non si traduce in un compromesso a somma zero, ma in un guadagno collettivo. Notevole è anche l'effetto sulle metriche di dispersione: lo scarto tra il lavoratore più soddisfatto e quello meno soddisfatto si contrae e la deviazione standard scende dal 18.5\% al 16.1\%. L'ottimizzazione non si limita quindi a sollevare il fondo della classifica, ma compatta l'intera distribuzione verso una maggiore uniformità.
+
+La nuova Tabella~\ref{tab:resB_workers} permette di tracciare nel dettaglio i trasferimenti di utilità e la tipica progressione del criterio \emph{leximin}. Nella bozza iniziale, il lavoratore più svantaggiato era W14 (Roberto Ferrara) con il 43.4\%. Nel piano finale, W14 balza al 52.8\%, cedendo l'ultimo gradino a W05 (52.0\%). Questa dinamica rappresenta il cuore del \emph{leximin}: raggiunto il limite invalicabile per il peggior lavoratore, l'algoritmo passa immediatamente a sollevare le posizioni appena superiori.
+
+Per finanziare questi ampi recuperi — si veda W15 che guadagna quasi 20 punti percentuali, o W02 che ne recupera 16 — il sistema chiede un sacrificio ai colleghi più favoriti. Lavoratori come W04 (Sara Russo) e W13 (Simone Gallo), partiti rispettivamente con un perfetto 100.0\% e un ottimo 88.2\%, cedono organicamente parte del loro surplus per assestarsi entrambi al 76.3\%. Questa capillare redistribuzione conferma l'eccellente capacità del modello di bilanciare le preferenze individuali anche in presenza di forti asimmetrie operative.
+
+\begin{table}[H]
+\centering
+\caption{Caso B --- metriche di soddisfazione individuale (ordine crescente di equità finale).}
+\label{tab:resB_workers}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}llcccccc@{}}
+\toprule
+\textbf{ID} & \textbf{Nome} & \textbf{Ass. In.} & \textbf{Ass. Fin.} & \textbf{Max} & \textbf{Norm. In.} & \textbf{Norm. Fin.} & \textbf{$\Delta$} \\
+\midrule
+W05 & Andrea Esposito  & 11.0  & 13.0  & 25.0  & 44.0\% & 52.0\% & $+8.0$ \\
+W18 & Gianni Serra     & 13.0  & 13.0  & 25.0  & 52.0\% & 52.0\% & $0.0$ \\
+W01 & Marco Rossi      & 66.0  & 66.0  & 125.0 & 52.8\% & 52.8\% & $0.0$ \\
+W14 & Roberto Ferrara  & 54.2  & 66.0  & 125.0 & 43.4\% & 52.8\% & $+9.4$ \\
+W17 & Laura Mancini    & 70.6  & 70.6  & 125.0 & 56.5\% & 56.5\% & $0.0$ \\
+W06 & Chiara Romano    & 82.4  & 82.4  & 125.0 & 65.9\% & 65.9\% & $0.0$ \\
+W11 & Alessandro Conti & 82.4  & 82.4  & 125.0 & 65.9\% & 65.9\% & $0.0$ \\
+W02 & Giulia Bianchi   & 78.0  & 102.0 & 150.0 & 52.0\% & 68.0\% & $+16.0$ \\
+W19 & Paola Costa      & 93.0  & 86.0  & 125.0 & 74.4\% & 68.8\% & $-5.6$ \\
+W15 & Monica Cattaneo  & 63.0  & 87.8  & 125.0 & 50.4\% & 70.2\% & $+19.8$ \\
+W09 & Davide Greco     & 54.0  & 54.0  & 75.0  & 72.0\% & 72.0\% & $0.0$ \\
+W10 & Elena Marino     & 76.0  & 90.0  & 125.0 & 60.8\% & 72.0\% & $+11.2$ \\
+W04 & Sara Russo       & 125.0 & 95.4  & 125.0 & 100.0\% & 76.3\% & $-23.7$ \\
+W13 & Simone Gallo     & 110.2 & 95.4  & 125.0 & 88.2\% & 76.3\% & $-11.9$ \\
+W12 & Valentina Bruno  & 7.0   & 7.0   & 8.0   & 87.5\% & 87.5\% & $0.0$ \\
+W07 & Matteo Colombo   & 68.0  & 68.0  & 75.0  & 90.7\% & 90.7\% & $0.0$ \\
+W20 & Fabio Martini    & 69.0  & 69.0  & 75.0  & 92.0\% & 92.0\% & $0.0$ \\
+W03 & Luca Ferrari     & 35.0  & 40.0  & 40.0  & 87.5\% & 100.0\% & $+12.5$ \\
+W08 & Francesca Ricci  & 123.0 & 125.0 & 125.0 & 98.4\% & 100.0\% & $+1.6$ \\
+W16 & Stefano Leone    & 7.0   & 8.0   & 8.0   & 87.5\% & 100.0\% & $+12.5$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% [FIGURA 5 -- DA INSERIRE]
+% Inserire un grafico "prima vs dopo" (Caso B): per ogni lavoratore due barre
+% affiancate (bozza vs finale) della soddisfazione normalizzata, oppure un grafico
+% a frecce che mostra lo spostamento. Evidenziare la compressione della
+% distribuzione (riduzione di scarto e deviazione standard).
+\begin{figure}[H]
+\centering
+\fbox{\parbox{0.8\textwidth}{\centering\vspace{1.8cm}
+\textit{[Figura 5] Caso B: soddisfazione normalizzata prima (bozza) vs.\\
+dopo (finale) per lavoratore; visibile la compressione della distribuzione.}
+\vspace{1.8cm}}}
+\caption{Effetto del raffinamento leximin sulla distribuzione dell'equità (Caso B).}
+\label{fig:beforeafter}
+\end{figure}
+
+\subsection{Distribuzione del carico gravoso}
+
+La gestione dei turni notturni (Tabella~\ref{tab:carico}) conferma l'efficacia del modello nel bilanciare carichi usuranti. Sebbene le notti siano numericamente inferiori alle mattine (96 contro 157), il loro coefficiente doppio genera un carico pesato di 192 unità. Questo assicura che l'algoritmo distribuisca il lavoro notturno con la massima priorità, assegnando da 0 a un massimo di 7 notti per operatore.
+
+I dati dimostrano inoltre la totale affidabilità del sistema nel rispettare i vincoli inalienabili. Francesca Ricci (W08), avendo un esonero medico per le notti (impostato come vincolo \emph{hard} in Fase 1), ha ricevuto esattamente zero notti nel piano finale. L'ottimizzatore è quindi in grado di spingere al massimo l'equità globale senza mai violare le specifiche tutele individuali.
+
+\begin{table}[H]
+\centering
+\caption{Caso B --- conteggio dei turni assegnati per tipologia (piano finale).}
+\label{tab:carico}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Turno} & \textbf{Assegnazioni} & \textbf{Carico (pesato)} \\
+\midrule
+Mattina (M)    & 157 & 157 \\
+Pomeriggio (P) & 151 & 151 \\
+Notte (N)      & 96  & 192 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Discussione complessiva}
+
+Su entrambi i casi il sistema raggiunge i tre obiettivi della traccia: (1)~genera piani \textbf{validi al 100\%} sui vincoli hard, certificati da un verificatore indipendente; (2)~massimizza la soddisfazione tenendo conto delle preferenze formalizzate; (3)~migliora l'equità secondo il criterio leximin, \emph{senza} degradare il benessere collettivo (anzi, aumentandolo). La robustezza dell'approccio neuro-simbolico è confermata dal fatto che le garanzie matematiche non dipendono mai dalla ``buona fede'' dell'LLM, ma da componenti formali deterministici.
+
+% ===========================================================================
+\section{Scenari futuri e possibili estensioni}
+\label{sec:futuro}
+% ===========================================================================
+
+I risultati ottenuti aprono diverse direzioni di evoluzione, sia sul piano della sicurezza sia su quello funzionale.
+
+\subsection{Sicurezza dell'esecuzione del codice generato}
+
+Il sistema esegue il codice Python generato dall'LLM tramite la funzione \texttt{exec()} (all'interno di \texttt{safe\_execute}): una scelta consapevole, che nel contesto attuale garantisce la massima flessibilità senza introdurre complessità infrastrutturale. In uno scenario di produzione su larga scala, tuttavia, l'esecuzione di codice generato dinamicamente richiede contromisure aggiuntive: un prompt malevolo o un'allucinazione del modello potrebbero produrre script che accedono al filesystem o alla rete.
+
+L'evoluzione architetturale verso un prodotto enterprise richiede necessariamente un approccio articolato su due livelli:
+\begin{itemize}[noitemsep]
+  \item \textbf{Parsing}: a livello applicativo, prima dell'esecuzione, il codice dovrebbe essere sottoposto ad una procedura di parsing per essere certi che contenga esclusivamente chiamate alle librerie matematiche consentite (es. \texttt{cp\_model} di OR-Tools), bloccando preventivamente qualsiasi importazione di moduli di sistema (come \texttt{os}, \texttt{sys} o \texttt{socket}).
+  \item \textbf{Isolamento}: a livello infrastrutturale, l'esecuzione deve avvenire in un ambiente rigidamente confinato e privo di permessi di I/O e rete. Questo può essere realizzato utilizzando runtime WebAssembly (Wasm) o tramite container effimeri (es. Docker).
+\end{itemize}
+
+\subsection{Robustezza del prompting}
+
+Nel design attuale, il prompt del Drafting Agent include template Python: una scelta progettuale rigorosa e mirata che neutralizza efficacemente le allucinazioni del modello, orientandone l'attività verso un'assoluta precisione esecutiva. Questo approccio garantisce l'affidabilità dell'output, incanalando con successo le capacità dell'LLM all'interno di un perimetro sintattico sicuro e controllato.
+
+Il passo successivo consiste nel passare dalla generazione di script completi all'orchestrazione di funzioni pre-validate, sfruttando il Function Calling (o Structured Outputs) dell'LLM. Anziché scrivere intero codice CP-SAT, il modello invocherebbe direttamente funzioni di libreria già testate — ad esempio \texttt{add\_coverage(model, day, shift, 2)} o \texttt{add\_night\_rest(model, worker)} — concentrandosi esclusivamente su \emph{quali} vincoli attivare e con \emph{quali} parametri. In questo modo la logica matematica (verificata una volta) resterebbe separata dall'orchestrazione semantica (affidata all'LLM), riducendo ulteriormente la superficie d'errore.
+
+\subsection{Altre direzioni di sviluppo}
+
+\begin{itemize}[itemsep=1ex]
+  \item \textbf{Gestione multi-reparto e Cross-Training (Caso B Esteso)}: estendere il modello per gestire non solo ruoli generici, ma sotto-specialità cliniche (es. Terapia Intensiva, Pronto Soccorso). L'algoritmo potrebbe ottimizzare l'allocazione di personale cross-trained (con competenze multiple) tra reparti diversi per bilanciare picchi di carico.
+  \item \textbf{Ripianificazione Dinamica (Rescheduling)}: gestire eventi imprevisti (malattie improvvise, emergenze) tramite ri-ottimizzazione. In questo scenario, l'obiettivo si estende: oltre a mantenere fattibilità ed equità, il solutore deve penalizzare la deviazione dal piano originale (minimizzazione delle perturbazioni) per garantire stabilità organizzativa ai lavoratori.
+  \item \textbf{Scalabilità}: per ospedali con centinaia di dipendenti, il modello CP-SAT attuale (e in particolare il loop leximin forzato) potrebbe incontrare limiti computazionali. Per garantire prestazioni ottimali anche su larga scala, le integrazioni future potrebbero suddividere la pianificazione elaborando i turni per singolo reparto, oppure riducendo l'orizzonte temporale a finestre settimanali anziché mensili, così da abbattere drasticamente la complessità.
+  \item \textbf{Explainable AI e Negoziazione Conversazionale}: espandere la Fase 1 per permettere al Workers Agent di instaurare un dialogo con l'utente. Se una preferenza non può essere soddisfatta a causa di un vincolo strutturale, l'agente (interrogando l'esito della Fase 3) dovrebbe spiegare in linguaggio naturale il motivo del rifiuto (``Non posso darti libero il 25 perché violerebbe la copertura minima del turno''), avviando una negoziazione per trovare soluzioni alternative.
+  \item \textbf{Integrazione con Standard Ospedalieri}: implementare interfacce (es. API REST) conformi agli standard internazionali (come HL7 o FHIR) per la gestione automatica delle anagrafiche e dell'esportazione dei turni nei software gestionali esistenti.
+\end{itemize}
+
+% ===========================================================================
+\section{Conclusioni}
+\label{sec:conclusioni}
+% ===========================================================================
+
+SmartScheduler dimostra che il paradigma neuro-simbolico può affrontare con successo un problema reale e complesso come lo scheduling ospedaliero. Su entrambi i casi di studio il sistema ha generato piani conformi al 100\% dei vincoli normativi, ha migliorato l'equità distributiva (con incrementi del minimo normalizzato superiori a 8 punti percentuali) e ha aumentato la soddisfazione complessiva del gruppo, escludendo qualsiasi compromesso al ribasso.
+
+Questi risultati sono possibili proprio perché ogni componente del sistema fa ciò che sa fare meglio: l'LLM comprende il linguaggio naturale e lo formalizza, il solutore CP-SAT garantisce l'ottimalità matematica, il verificatore certifica la conformità. Nessuno dei tre, da solo, sarebbe sufficiente.
+
+In definitiva, SmartScheduler non si limita a produrre turni legali: produce turni \emph{giusti}, dimostrando che l'intelligenza artificiale, quando guidata da un'architettura rigorosa, può mettere l'equità al centro delle decisioni organizzative.
+
+\end{document}
