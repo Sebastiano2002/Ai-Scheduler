@@ -190,10 +190,11 @@ for w, floor in LOCKED_FLOORS.items():
 z = model.NewIntVar(-100000, 100000, 'z_min_norm')
 for w in FREE_WORKERS:
     model.Add(z * SAT_MAX_SCALED[w] <= sat[w] * NORM_SCALE)
-# Tie-breaker: a parita' di minimo normalizzato, massimizza la soddisfazione
-# assoluta totale. BIG e' grande cosi' che il minimo normalizzato resti l'obiettivo
-# DOMINANTE (1 unita' di z vale piu' di tutta la somma assoluta).
-BIG = 1000000
+# Tie-breaker (Bounded Leximin): massimizza in subordine la soddisfazione totale.
+# Impostando BIG=15 il sistema e' disposto a sacrificare al massimo 15 punti di 
+# soddisfazione globale per regalare 1 punto percentuale (1 unita' di z) al 
+# lavoratore piu' svantaggiato. Evita i "bagni di sangue" del Leximin puro.
+BIG = 15
 model.Maximize(z * BIG + cp_model.LinearExpr.sum([sat[w] for w in WORKER_IDS]))
 
 solver = cp_model.CpSolver()
