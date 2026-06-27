@@ -3,19 +3,18 @@ input_data.py
 =============
 Fase 1 - Definizione strutturata dei dati del problema SmartScheduler.
 
-Questo modulo raccoglie, sotto forma di costanti Python, tutte le informazioni
-descritte nel PROJECT_CONTEXT.md:
+Questo modulo raccoglie, sotto forma di costanti Python:
     - i turni giornalieri (Mattina / Pomeriggio / Notte);
     - i vincoli obbligatori (hard constraints);
     - l'orizzonte temporale di pianificazione;
     - l'elenco dei lavoratori per i due Use Case (A e B).
 
-Configurazioni lavoratori:
-    - Use Case A: 13 lavoratori OMOGENEI (tutti standard, W01-W13).
+Configurazioni dei lavoratori:
+    - Use Case A: 13 lavoratori (tutti standard, W01-W13).
     - Use Case B: 20 lavoratori (W01-W13 standard + W14-W20 specializzati).
 
 Tutti gli altri moduli delle fasi successive importano da qui, in modo da avere
-un'unica fonte di verita' per i dati del problema.
+una fonte univoca per i dati del problema.
 """
 
 from datetime import date, timedelta
@@ -32,7 +31,6 @@ SHIFTS = {
         "fine": "14:00",
         "durata_ore": 6,
         "turno_doppio": False,
-        # Conteggio ai fini del limite mensile (25 turni): la Notte vale 2.
         "peso_turni": 1,
     },
     "P": {
@@ -50,51 +48,42 @@ SHIFTS = {
         "durata_ore": 12,
         "turno_doppio": True,
         "peso_turni": 2,
+        
     },
 }
 
-# Comodita': lista ordinata dei codici turno.
+#lista ordinata dei codici turno.
 SHIFT_CODES = list(SHIFTS.keys())  # ["M", "P", "N"]
 
 # ---------------------------------------------------------------------------
 # VINCOLI OBBLIGATORI (HARD CONSTRAINTS)
 # ---------------------------------------------------------------------------
-# Regole istituzionali inderogabili che la schedulazione deve sempre rispettare.
+
 HARD_CONSTRAINTS = {
-    # Massimo monte ore di lavoro per dipendente in una settimana.
+
     "max_ore_settimanali": 36,
-    # Numero esatto di turni che ogni lavoratore deve svolgere nel mese.
     "turni_mensili_esatti": 25,
-    # Al massimo un turno per giorno per lavoratore.
     "max_turni_per_giorno": 1,
-    # "Due turni consecutivi" vietati: dato il limite di 1 turno/giorno, l'unica
-    # coppia a cavallo di due giorni temporalmente CONTIGUA e' Notte (d, 20:00->
-    # 08:00) seguita da Mattina (d+1, 08:00->14:00). E' questa la catena vietata
-    # (gia' implicata anche dai 2 riposi obbligatori dopo la Notte). Lavorare in
-    # giorni di calendario consecutivi con turni DIURNI e' invece PERMESSO: NON
-    # e' un divieto di lavorare in giorni adiacenti (sarebbe infeasible con 25
-    # turni su 31 giorni). Verificato in Fase3_verification_agent._check_night_to_morning.
+    # "Due turni consecutivi" vietati: dato il limite di 1 turno al giorno, il turno Notte seguita da Mattina è vietato
+    # Lavorare in giorni di calendario consecutivi con turni DIURNI e' invece PERMESSO
     "catena_turni_contigui_vietata": "N->M",
-    # Il turno di notte e' un turno doppio (12h).
     "notte_turno_doppio": True,
-    # Giorni di riposo obbligatori subito dopo un turno di notte.
     "riposi_obbligatori_dopo_notte": 2,
-    # Garantire almeno questo numero di giorni di riposo (valutando preferenze).
     "giorni_riposo_minimi": 1,
 }
 
 # ---------------------------------------------------------------------------
 # ORIZZONTE TEMPORALE
 # ---------------------------------------------------------------------------
-# Periodo di pianificazione di un mese: dal 7 Dicembre 2026 al 6 Gennaio 2027.
+# Periodo di pianificazione: dal 7 Dicembre 2026 al 6 Gennaio 2027.
 START_DATE = date(2026, 12, 7)
 END_DATE = date(2027, 1, 6)
-NUM_DAYS = (END_DATE - START_DATE).days + 1  # 31 giorni
+NUM_DAYS = (END_DATE - START_DATE).days + 1  
 
-# Elenco esplicito di tutte le date dell'orizzonte (utile per i modelli OR-Tools).
+# Elenco esplicito di tutte le date (utile per i modelli OR-Tools).
 PLANNING_DATES = [START_DATE + timedelta(days=i) for i in range(NUM_DAYS)]
 
-# Giorni festivi compresi nell'orizzonte (rilevanti per indisponibilita').
+# Giorni festivi (rilevanti per indisponibilita').
 HOLIDAYS = {
     date(2026, 12, 8): "Immacolata Concezione",
     date(2026, 12, 25): "Natale",
@@ -106,12 +95,6 @@ HOLIDAYS = {
 # ---------------------------------------------------------------------------
 # LAVORATORI
 # ---------------------------------------------------------------------------
-# Configurazione dei lavoratori per i due use case:
-#   - Use Case A: 13 lavoratori OMOGENEI (tutti 'standard', W01-W13).
-#   - Use Case B: 20 lavoratori totali:
-#       * W01-W13 restano tutti 'standard' (13 persone);
-#       * W14-W20 sono nuovi lavoratori 'specializzati' (7 persone).
-
 # Anagrafica dei 13 lavoratori standard (comuni ad entrambi gli use case).
 _ANAGRAFICA_STANDARD = [
     ("W01", "Marco Rossi"),
@@ -140,13 +123,13 @@ _ANAGRAFICA_SPECIALIZZATI_B = [
     ("W20", "Fabio Martini"),
 ]
 
-# Use Case A: 13 lavoratori omogenei (tutti 'standard').
+# Use Case A
 WORKERS_CASE_A = [
     {"id": wid, "nome": nome, "ruolo": "standard"}
     for wid, nome in _ANAGRAFICA_STANDARD
 ]
 
-# Use Case B: 20 lavoratori = 13 standard (W01-W13) + 7 specializzati (W14-W20).
+# Use Case B
 WORKERS_CASE_B = [
     {"id": wid, "nome": nome, "ruolo": "standard"}
     for wid, nome in _ANAGRAFICA_STANDARD
@@ -155,7 +138,7 @@ WORKERS_CASE_B = [
     for wid, nome in _ANAGRAFICA_SPECIALIZZATI_B
 ]
 
-# ID degli specializzati nel Use Case B (comodo per lookup rapidi).
+# ID degli specializzati nel Use Case B.
 SPECIALIZED_IDS_CASE_B = {wid for wid, _ in _ANAGRAFICA_SPECIALIZZATI_B}
 
 # ---------------------------------------------------------------------------
@@ -177,7 +160,7 @@ STAFFING_CASE_B = {
 # ---------------------------------------------------------------------------
 # REGISTRO USE CASE
 # ---------------------------------------------------------------------------
-# Mappa comoda usata dagli agenti delle fasi successive per iterare sui casi.
+# Mappa usata dagli agenti delle fasi successive per iterare sui casi.
 USE_CASES = {
     "A": {
         "descrizione": "13 lavoratori omogenei (tutti standard), minimo 2 per turno.",
@@ -191,9 +174,8 @@ USE_CASES = {
     },
 }
 
-
+# Stampa di verifica dei dati caricati.
 if __name__ == "__main__":
-    # Piccola stampa di verifica dei dati caricati.
     print("=== SmartScheduler - Dati del problema (Fase 1) ===")
     print(f"Turni definiti      : {', '.join(SHIFT_CODES)}")
     print(f"Orizzonte temporale : {START_DATE} -> {END_DATE} ({NUM_DAYS} giorni)")
