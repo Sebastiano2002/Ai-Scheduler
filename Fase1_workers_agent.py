@@ -3,11 +3,18 @@ Fase1_workers_agent.py
 ======================
 Fase 1 - Workers Agent.
 
-Legge le preferenze dei lavoratori in linguaggio naturale, le invia all'LLM
-per formalizzarle in un dizionario Python strutturato (WORKER_PREFERENCES),
-e salva l'output in 'formalized_preferences_case_X.py' con due strutture
-parallele: HARD_CONSTRAINTS (vincoli inderogabili) e SOFT_CONSTRAINTS
-(preferenze + modello di soddisfazione).
+Questo script implementa l'agente che:
+    1. legge le preferenze dei lavoratori espresse in linguaggio naturale
+       (file 'worker_preferences.txt');
+    2. costruisce un prompt che chiede all'LLM di formalizzarle in un
+       dizionario Python strutturato 'WORKER_PREFERENCES';
+    3. usa il motore della Fase 0 (AgentExecutor.run_with_retry) per generare
+       ed eseguire in sicurezza il codice prodotto dall'LLM;
+    4. salva il risultato in 'formalized_preferences_case_A.py' /
+       'formalized_preferences_case_B.py'.
+        L'output formalizzato distingue ESPLICITAMENTE due strutture parallele:
+        - HARD_CONSTRAINTS (vincoli inderogabili)
+- SOFT_CONSTRAINTS (preferenze + modello di soddisfazione).
 """
 
 import pprint
@@ -23,14 +30,18 @@ import input_data
 PREFERENCES_FILE = "worker_preferences.txt"
 
 
-
+# ---------------------------------------------------------------------------
+# LETTURA DELLE PREFERENZE TESTUALI
+# ---------------------------------------------------------------------------
 def load_preferences_text(path=PREFERENCES_FILE):
     """Legge l'intero file di preferenze in linguaggio naturale."""
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 
-
+# ---------------------------------------------------------------------------
+# COSTRUZIONE DEL PROMPT PER L'LLM
+# ---------------------------------------------------------------------------
 def build_prompt(case_label, workers, preferences_text):
     """
     Costruisce il prompt che chiede all'LLM di trasformare le preferenze
@@ -181,7 +192,9 @@ che definisca `WORKER_PREFERENCES`.
     return prompt
 
 
-
+# ---------------------------------------------------------------------------
+# SALVATAGGIO DELL'OUTPUT FORMALIZZATO
+# ---------------------------------------------------------------------------
 def split_hard_soft(worker_preferences):
     """Scompone il dizionario LLM in due strutture: HARD_CONSTRAINTS e SOFT_CONSTRAINTS."""
     hard_per_worker = {}
@@ -213,7 +226,7 @@ def split_hard_soft(worker_preferences):
 
 
 def save_formalized(case_label, worker_preferences):
-    """Salva le preferenze formalizzate in 'formalized_preferences_case_X.py'."""
+    """Salva le preferenze formalizzate in 'formalized_preferences_case_X.py'"""
     out_path = f"formalized_preferences_case_{case_label}.py"
     timestamp = datetime.datetime.now().isoformat(timespec="seconds")
 
@@ -253,7 +266,9 @@ def save_formalized(case_label, worker_preferences):
     return out_path
 
 
-
+# ---------------------------------------------------------------------------
+# FORMALIZZAZIONE DI UN SINGOLO USE CASE
+# ---------------------------------------------------------------------------
 def formalize_case(executor, case_label, preferences_text):
     """Esegue il flusso completo per un use case: prompt -> LLM -> validazione -> salvataggio."""
     use_case = input_data.USE_CASES[case_label]
@@ -280,7 +295,8 @@ def formalize_case(executor, case_label, preferences_text):
               f"'WORKER_PREFERENCES' valido per lo Use Case {case_label}.")
         return None
 
-    # Validazione Pydantic dell'output generato dall'LLM.
+    # --- Validazione Pydantic dell'output strutturato ---
+    # Il dizionario generato dall'LLM viene validato con il modello AllWorkerPreferences
     try:
         AllWorkerPreferences.from_raw_dict(worker_preferences)
         print(f"[+] Validazione Pydantic superata per lo Use Case {case_label}.")
@@ -293,7 +309,9 @@ def formalize_case(executor, case_label, preferences_text):
     return save_formalized(case_label, worker_preferences)
 
 
-
+# ---------------------------------------------------------------------------
+# MAIN: esegue la formalizzazione per ENTRAMBI gli use case
+# ---------------------------------------------------------------------------
 def main():
     import argparse
     parser = argparse.ArgumentParser(
@@ -304,7 +322,6 @@ def main():
         help="Use case da eseguire (default: all).",
     )
     args = parser.parse_args()
-
 
     preferences_text = load_preferences_text()
     executor = AgentExecutor()
