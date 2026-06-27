@@ -3,23 +3,17 @@ Fase2_drafting_agent.py
 =================
 Fase 2 - Drafting Agent (Bozza della Schedulazione).
 
-La bozza e' generata ESCLUSIVAMENTE tramite l'LLM, come richiesto dal
-PROJECT_CONTEXT.md:
+La bozza e' generata ESCLUSIVAMENTE tramite l'LLM
 
-  *Percorso LLM* (`build_drafting_prompt` + `run_llm_drafting`):
   il Drafting Agent costruisce un prompt dettagliato che istruisce l'LLM a
   SCRIVERE il codice `ortools.sat.python.cp_model`. Il codice generato viene
   eseguito in sicurezza tramite il motore della Fase 0
   (`AgentExecutor.run_with_retry`), con auto-correzione sugli errori.
 
-Il percorso produce una struttura dati di output (`ScheduleResult`), cosi' le
-Fasi 3-4 (verifica + raffinamento) possono consumarla. La validazione formale
+Il percorso produce una struttura dati di output (`ScheduleResult`) per le
+Fasi 3-4 (verifica + raffinamento). La validazione formale
 dei vincoli hard NON e' compito di questa fase: spetta esclusivamente al
 Verification Agent della Fase 3.
-
-Esecuzione (richiede la variabile d'ambiente GEMINI_API_KEY):
-    python Fase2_drafting_agent.py --case A
-    python Fase2_drafting_agent.py --case B
 """
 
 import argparse
@@ -38,37 +32,24 @@ import input_data
 # 0. CARICAMENTO DEI DATI DEL PROBLEMA PER UNO USE CASE
 # ===========================================================================
 # Le preferenze sono i pesi di soddisfazione formalizzati dalla Fase 1
-# (satisfaction_weights), scalati a interi per la funzione obiettivo CP-SAT.
 SATISFACTION_SCALE = 10  # i pesi hanno al massimo 1 cifra decimale -> *10.
 
 # Penalita' (in punti di soddisfazione) applicata quando un lavoratore viene
 # assegnato in un suo "giorno indesiderato" (richiesta di ferie). E' un vincolo
 # SOFT ad alta penalita': il solver evita questi giorni con forza, ma in caso di
 # emergenza di organico puo' comunque assegnarli invece di fallire (INFEASIBLE).
-# Deve essere molto piu' alta del peso di un turno semplicemente sgradito.
 UNDESIRED_DAY_PENALTY = 50.0
 
-# Penalita' di EQUITA' (Fairness-Oriented Allocation, Stage 2 del PDF). La bozza
-# non deve solo massimizzare la soddisfazione TOTALE, ma anche "distribuire i
+# Penalita' di EQUITA'. La bozza non deve solo massimizzare la soddisfazione TOTALE, ma anche "distribuire i
 # turni indesiderati in modo equo... evitando di penalizzare in modo
-# sproporzionato singoli lavoratori". Modelliamo l'equita' come penalita' soft
-# nell'obiettivo sullo SCARTO (max - min) tra lavoratori del numero di:
+# sproporzionato singoli lavoratori". Modelliamo l'equita' tra lavoratori.
 #   - turni di Notte (il turno piu' gravoso, doppio);
 #   - VIOLAZIONI di ferie, cioe' turni che un lavoratore e' costretto a fare in
-#     un SUO giorno indesiderato (vedi UNDESIRED_DAYS). NB: nell'orizzonte i
-#     giorni di ferie coincidono in larga parte con i festivi, quindi bilanciare
-#     i "turni festivi grezzi" (vecchia formulazione) forzava i lavoratori
-#     proprio sui giorni che avevano chiesto liberi, in conflitto diretto con la
-#     soddisfazione. Bilanciare le VIOLAZIONI invece non combatte la
-#     soddisfazione: il totale delle violazioni e' gia' minimizzato da
-#     UNDESIRED_DAY_PENALTY, questo termine ne pareggia solo la distribuzione.
-# Sono pesi DELIBERATAMENTE BASSI: agiscono da spareggio (tie-breaker) che
-# bilancia il carico gravoso SENZA stravolgere le preferenze individuali (la
-# soddisfazione e l'alta UNDESIRED_DAY_PENALTY restano dominanti). Da ricalibrare
-# dopo un run reale: alzandoli si ottiene piu' equita' a scapito della
+#     un SUO giorno indesiderato (vedi UNDESIRED_DAYS). 
+# Da ricalibrare dopo un run reale: alzandoli si ottiene piu' equita' a scapito della
 # soddisfazione totale, abbassandoli il contrario.
-NIGHT_BALANCE_PENALTY = 2.0      # per unita' di scarto (max-min) sul numero di Notti
-UNDESIRED_BALANCE_PENALTY = 2.0  # per unita' di scarto (max-min) sulle violazioni di ferie
+NIGHT_BALANCE_PENALTY = 2.0      
+UNDESIRED_BALANCE_PENALTY = 2.0  
 
 
 @dataclass
@@ -82,16 +63,10 @@ class ProblemData:
     specialized_ids: List[str]
     # Vincoli SOFT per lavoratore (turni_preferiti/indesiderati,
     # giorni_indesiderati, flexibility_score, satisfaction_weights) dalla Fase 1.
-    # NB DESIGN: il modello usa solo 'satisfaction_weights'. La tolleranza
-    # individuale (flexibility_score) NON va aggiunta come termine separato
-    # all'obiettivo: la Fase 1 la incorpora gia' nella grandezza dei pesi
-    # negativi (~ -6*(1-flexibility_score)). Moltiplicare di nuovo i pesi per
-    # (1-flexibility_score) sarebbe un DOPPIO CONTEGGIO (effetto ~ quadratico).
     preferences: Dict[str, dict]
     # Giorni indesiderati / richieste di ferie (vincolo SOFT ad alta penalita')
-    # come indici di giorno (0-based sull'orizzonte): {wid: set(indici_giorno)}.
     undesired_days: Dict[str, set]
-    # Turni assolutamente vietati (vincolo HARD) per lavoratore: {wid: set(codici)}.
+    # Turni assolutamente vietati (vincolo HARD) per lavoratore
     forbidden: Dict[str, set]
     staffing: dict
 
@@ -110,7 +85,6 @@ def load_problem_data(case_label: str) -> ProblemData:
     workers = use_case["workers"]
 
     # Preferenze formalizzate prodotte dalla Fase 1: due strutture parallele
-    # HARD_CONSTRAINTS (vincoli inderogabili) e SOFT_CONSTRAINTS (preferenze).
     try:
         mod = importlib.import_module(f"formalized_preferences_case_{case_label}")
         soft_constraints = dict(mod.SOFT_CONSTRAINTS)
@@ -127,7 +101,7 @@ def load_problem_data(case_label: str) -> ProblemData:
             f"(Fase1_workers_agent.py)."
         ) from exc
 
-    # Le preferenze (soft) sono cio' che alimenta la funzione obiettivo e i
+    # Le preferenze (soft) servono per la funzione obiettivo e i
     # ragionamenti sulla soddisfazione delle fasi 2/3/4.
     preferences = soft_constraints
 
@@ -172,7 +146,6 @@ class ScheduleResult:
     """
     Risultato di una bozza di schedulazione.
 
-    schedule[worker_id][day_index] = codice turno ('M'/'P'/'N') oppure None.
     """
 
     case_label: str
@@ -183,7 +156,7 @@ class ScheduleResult:
     satisfaction_per_worker: Dict[str, float] = field(default_factory=dict)
     source: str = "llm"
     # Sorgente cp_model effettivamente eseguito che ha prodotto questa bozza
-    # (valorizzato sul percorso LLM). E' l'input testuale della Fase 4.
+    # E' l'input testuale della Fase 4.
     generated_code: Optional[str] = None
 
 
@@ -195,9 +168,7 @@ def build_drafting_prompt(data: ProblemData) -> str:
     Costruisce il prompt che istruisce l'LLM a generare lo script
     `ortools.sat.python.cp_model` per la bozza di schedulazione.
 
-    Il codice generato gira nel namespace di esecuzione (safe_execute), dove
-    sono GIA' disponibili le seguenti variabili pre-caricate (vedi
-    `run_llm_drafting`): non vanno ridefinite, vanno solo usate.
+    Il codice generato gira nel namespace di esecuzione (safe_execute)
     """
     shifts = input_data.SHIFTS
     descrizione_turni = "\n".join(
@@ -254,7 +225,7 @@ Turni (codici): {", ".join(input_data.SHIFT_CODES)}
 - cp_model        : modulo ortools.sat.python.cp_model gia' importato
 
 ### STRUTTURA OBBLIGATORIA: build_model() + DUE FASI DI RISOLUZIONE
-⚠️ FONDAMENTALE PER LA FATTIBILITA' (soprattutto CASO B con 20 lavoratori). Il
+FONDAMENTALE PER LA FATTIBILITA' (soprattutto CASO B con 20 lavoratori). Il
 modello e' molto vincolato: "ESATTAMENTE 25 turni pesati" + "2 riposi dopo la
 Notte" lasciano una regione fattibile piccolissima. Se risolvi in un colpo solo
 con l'obiettivo di soddisfazione, il solver spesso NON trova alcuna soluzione
@@ -304,7 +275,7 @@ for w in WORKER_IDS:
                 for s in SHIFT_CODES:
                     model.Add(x[(w, d, 'N')] + x[(w, d + k, s)] <= 1)
 ```
-⚠️ TRAPPOLA COMUNE #1: dimenticare il controllo `if d + k < NUM_DAYS`.
+   TRAPPOLA COMUNE #1: dimenticare il controllo `if d + k < NUM_DAYS`.
    Senza questo check, l'ultimo giorno (indice {input_data.NUM_DAYS - 1}) puo' avere
    una Notte seguita da un altro turno l'indomani, violando H5.
    Esempio critico: Notte al giorno {input_data.NUM_DAYS - 2} -> i giorni
@@ -329,7 +300,7 @@ for w in WORKER_IDS:
     for d in range(NUM_DAYS - 1):      # NUM_DAYS - 1, NON NUM_DAYS
         model.Add(x[(w, d, 'N')] + x[(w, d + 1, 'M')] <= 1)
 ```
-⚠️ TRAPPOLA COMUNE #2: usare `range(NUM_DAYS)` invece di `range(NUM_DAYS - 1)`,
+  TRAPPOLA COMUNE #2: usare `range(NUM_DAYS)` invece di `range(NUM_DAYS - 1)`,
    che creerebbe un accesso fuori bounds a x[(w, NUM_DAYS, 'M')].
 
 ### TRAPPOLE COMUNI DA EVITARE
@@ -493,14 +464,12 @@ def worker_satisfaction(data: ProblemData, schedule: dict, w: str) -> float:
 # ---------------------------------------------------------------------------
 # SODDISFAZIONE NORMALIZZATA (proportional fairness)
 # ---------------------------------------------------------------------------
-# La soddisfazione ASSOLUTA non e' confrontabile tra lavoratori: l'intervallo di
-# valori raggiungibili dipende dalla grandezza dei pesi individuali (chi predilige
+# La soddisfazione ASSOLUTA non e' confrontabile tra lavoratori(chi predilige
 # la Notte, peso modesto e fortemente limitata dai riposi, ha un massimo di poche
 # unita'; chi predilige Mattina/Pomeriggio puo' raggiungere valori di un ordine di
-# grandezza superiore). Per misurare l'equita' "rispetto agli altri" (Stage 3 del
-# PDF) normalizziamo la soddisfazione sul MASSIMO INDIVIDUALE raggiungibile da
-# ciascun lavoratore: sat_norm(w) = sat(w) / sat_max(w) in [.., 1]. Misura quanto
-# un lavoratore e' vicino al PROPRIO ottimo, su una scala comune a tutti.
+# grandezza superiore). Per misurare l'equita' "rispetto agli altri"
+#  normalizziamo la soddisfazione sul MASSIMO INDIVIDUALE raggiungibile da
+# ciascun lavoratore. Misura quanto un lavoratore e' vicino al PROPRIO ottimo, su una scala comune a tutti.
 _SAT_MAX_CACHE: Dict[str, Dict[str, float]] = {}
 
 
@@ -509,9 +478,8 @@ def compute_sat_max(data: ProblemData) -> Dict[str, float]:
     Per ogni lavoratore calcola la soddisfazione ASSOLUTA massima teorica
     ottenibile rispettando i SOLI vincoli hard INDIVIDUALI (esclusi i vincoli di
     copertura/staffing, che accoppiano piu' lavoratori): e' il "punto ideale" del
-    lavoratore. In isolamento il lavoratore evita naturalmente i propri giorni di
-    ferie, quindi sat_max non include penalita'. Usato come denominatore per la
-    soddisfazione normalizzata. Risultato cache-ato per case_label.
+    lavoratore. Usato come denominatore per la
+    soddisfazione normalizzata.
     """
     if data.case_label in _SAT_MAX_CACHE:
         return _SAT_MAX_CACHE[data.case_label]
@@ -526,24 +494,24 @@ def compute_sat_max(data: ProblemData) -> Dict[str, float]:
         model = cp_model.CpModel()
         x = {(d, s): model.NewBoolVar(f"x_{d}_{s}")
              for d in range(num_days) for s in codes}
-        # Max 1 turno/giorno.
+       
         for d in range(num_days):
             model.AddAtMostOne(x[(d, s)] for s in codes)
-        # Turni vietati (hard per-lavoratore).
+        
         for s in data.forbidden.get(w, set()):
             for d in range(num_days):
                 model.Add(x[(d, s)] == 0)
-        # Esattamente 25 turni mensili pesati (la Notte vale 2).
+       
         model.Add(sum(
             weight[s] * x[(d, s)] for d in range(num_days) for s in codes) == 25)
-        # Finestre settimanali scorrevoli: <=36h e <=6 turni (>=1 riposo).
+       
         for t in range(num_days - 6):
             finestra = range(t, t + 7)
             model.Add(sum(
                 hours[s] * x[(d, s)] for d in finestra for s in codes) <= 36)
             model.Add(sum(
                 x[(d, s)] for d in finestra for s in codes) <= 6)
-        # Divieto Notte(d) -> Mattina(d+1).
+        
         for d in range(num_days - 1):
             model.Add(x[(d, "N")] + x[(d + 1, "M")] <= 1)
         # 2 giorni di riposo totale dopo ogni Notte.
@@ -576,14 +544,17 @@ def worker_satisfaction_pct(sat_abs: float, sat_max: float) -> float:
     Soddisfazione NORMALIZZATA in percentuale: quanto il lavoratore e' vicino al
     proprio ottimo individuale. 100% = orario ideale per lui; valori bassi (anche
     negativi, se forzato su ferie/turni sgraditi) = lontano dal proprio ottimo.
-    Il denominatore e' protetto (>=0.1) per i rari casi sat_max<=0.
+
     """
     denom = sat_max if sat_max > 0.1 else 0.1
     return round(100.0 * sat_abs / denom, 1)
 
 
 def _build_llm_context(data: ProblemData, max_time: float) -> dict:
-    """Pre-popola il namespace di esecuzione con i dati che il codice LLM usera'."""
+    """
+    Pre-popola il namespace di esecuzione con i dati che il codice LLM usera'.
+    
+    """
     shifts = input_data.SHIFTS
     return {
         "WORKER_IDS": list(data.worker_ids),
@@ -595,9 +566,6 @@ def _build_llm_context(data: ProblemData, max_time: float) -> dict:
         "UNDESIRED_DAYS": {w: set(v) for w, v in data.undesired_days.items()},
         "UNDESIRED_DAY_PENALTY": UNDESIRED_DAY_PENALTY,
         "FORBIDDEN_SHIFTS": {w: set(v) for w, v in data.forbidden.items()},
-        # Indici (0-based) dei giorni festivi nell'orizzonte. Informativo: il
-        # termine di equita' bilancia le VIOLAZIONI di ferie (UNDESIRED_DAYS),
-        # non i turni festivi grezzi (vedi UNDESIRED_BALANCE_PENALTY).
         "HOLIDAY_DAYS": {
             i for i, d in enumerate(input_data.PLANNING_DATES)
             if d in input_data.HOLIDAYS
@@ -620,7 +588,7 @@ def build_schedule_result(
 ) -> ScheduleResult:
     """
     Costruisce una `ScheduleResult` normalizzata a partire dall'output grezzo di
-    un'esecuzione cp_model (il dict `RESULT_SCHEDULE` lasciato nel namespace).
+    un'esecuzione cp_model.
 
     Centralizza la normalizzazione delle chiavi-giorno e il calcolo della
     soddisfazione per lavoratore, cosi' che sia la Fase 2 (bozza iniziale) sia la
@@ -650,8 +618,7 @@ def build_schedule_result(
 
 def save_generated_code(case_label: str, code: str, path: Optional[str] = None) -> str:
     """
-    Salva su .txt il codice cp_model prodotto dall'LLM (deliverable: "il modello
-    cp_model parziale generato dall'LLM"). E' anche l'input testuale della Fase 4.
+    Salva su .txt il codice cp_model prodotto dall'LLM. E' anche l'input testuale della Fase 4.
     """
     if path is None:
         path = f"draft_code_case_{case_label}.txt"
@@ -670,9 +637,9 @@ def run_llm_drafting(
 ) -> Optional[ScheduleResult]:
     """
     Percorso LLM ibrido: l'LLM scrive il cp_model, il motore della Fase 0 lo
-    esegue con auto-correzione. Ritorna ScheduleResult oppure None se fallisce.
+    esegue con auto-correzione. Ritorna ScheduleResult oppure ritorna None se fallisce.
 
-    `feedback` (opzionale): traccia d'errore prodotta dal Verification Agent
+    `feedback`: traccia d'errore prodotta dal Verification Agent
     (Fase 3) su una bozza precedente RIFIUTATA. Viene accodata al prompt cosi'
     che il Drafting Agent revisioni il piano correggendo le violazioni rilevate.
     """
@@ -771,7 +738,7 @@ def print_summary(data: ProblemData, result: ScheduleResult) -> None:
         print(f"Piu' soddisfatto     : {migliore} ({data.worker_names[migliore]}) "
               f"= {sat[migliore]}")
 
-    # Distribuzione dei turni per giorno (controllo copertura a colpo d'occhio).
+    # Distribuzione dei turni per giorno.
     print("\nConteggio turni assegnati per codice:")
     for s in input_data.SHIFT_CODES:
         tot = sum(
@@ -782,7 +749,7 @@ def print_summary(data: ProblemData, result: ScheduleResult) -> None:
 
     # Distribuzione del carico GRAVOSO tra i lavoratori (equita' della Fase 2):
     # uno scarto max-min basso indica una ripartizione equa di Notti e violazioni
-    # di ferie (le due quantita' bilanciate nell'obiettivo).
+    # di ferie.
     notti = {
         w: sum(1 for d in range(input_data.NUM_DAYS) if result.schedule[w][d] == "N")
         for w in data.worker_ids
@@ -814,7 +781,7 @@ def run_case(case_label: str, max_time: float = 60.0) -> Optional[ScheduleResult
           f"(standard: {len(data.standard_ids)}, specializzati: {len(data.specialized_ids)})")
     print(f"{'#'*64}")
 
-    # Inferenza via Google Gemini 2.5 Flash: richiede GEMINI_API_KEY.
+    # Inferenza via Google Gemini 2.5 Flash.
     from llm_engine import AgentExecutor
     executor = AgentExecutor()
     result = run_llm_drafting(executor, data, max_time=max_time)

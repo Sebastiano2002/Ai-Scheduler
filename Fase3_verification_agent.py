@@ -1,39 +1,12 @@
 """
 Fase3_verification_agent.py
-======================
-Fase 3 - Verifica della Schedulazione (Verification Agents).
+===========================
+Fase 3 - Verifica della Schedulazione.
 
-Implementa i due agenti di verifica descritti nel PROJECT_CONTEXT.md:
-
-  1. *Hard Constraint Verification Agent* (`HardConstraintVerifier`):
-     rilegge l'output del solver (la `ScheduleResult` prodotta dalla Fase 2)
-     e ricontrolla in modo
-     INDIPENDENTE e rigoroso TUTTI i vincoli hard (le "leggi") piu' la copertura
-     (staffing) e le indisponibilita'. Se trova anche una sola violazione,
-     RIFIUTA il piano e produce una traccia d'errore strutturata, pronta per
-     essere rimandata al Drafting Agent (Fase 4 / auto-correzione).
-
-  2. *Fairness Verification Agent* (`FairnessVerifier`):
-     viene eseguito SOLO se il piano e' matematicamente valido. Calcola il
-     punteggio di soddisfazione di ogni lavoratore e identifica ESPLICITAMENTE
-     il lavoratore piu' svantaggiato (quello con il punteggio minimo) con il suo
-     score: e' l'unico dato richiesto dalla Fase 4 per il raffinamento mirato.
-
-Nota di design: la verifica e' un CONTROLLO MATEMATICO sull'output del solver,
-non una generazione di codice. Per questo e' deterministica e NON richiede una
-API key (a differenza del percorso LLM della Fase 2). Il Verification Agent e'
-volutamente INDIPENDENTE dal builder della Fase 2: ricodifica le leggi da capo,
-cosi' una verifica che passa e' una garanzia reale e non una tautologia.
-
-Esecuzione (richiede la variabile d'ambiente GEMINI_API_KEY, tranne con --from-csv):
-    # Genera una bozza con l'LLM e la verifica:
-    python Fase3_verification_agent.py --case A
-    python Fase3_verification_agent.py --case B
-    python Fase3_verification_agent.py --case all
-
-    # Verifica una schedulazione gia' salvata su CSV (es. output Fase 2):
-    python Fase3_verification_agent.py --case A --from-csv
-    python Fase3_verification_agent.py --case A --from-csv schedule_case_A.csv
+Implementa i due agenti di verifica:
+  1. Hard Constraint Verifier: controlla matematicamente tutti i vincoli hard.
+  2. Fairness Verifier: calcola le metriche di equita' e identifica il
+     lavoratore piu' svantaggiato.
 """
 
 import argparse
@@ -55,21 +28,10 @@ from Fase2_drafting_agent import (
 )
 
 
-# ===========================================================================
-# 1. STRUTTURE DI OUTPUT DELLA VERIFICA
-# ===========================================================================
+
 @dataclass
 class Violation:
-    """
-    Una singola violazione di un vincolo hard.
-
-    Campi pensati per costruire una traccia d'errore leggibile sia dall'uomo
-    sia dal Drafting Agent (Fase 4):
-        law         : etichetta della legge violata (es. 'H2', 'STAFFING').
-        descrizione : spiegazione testuale della violazione.
-        worker_id   : lavoratore coinvolto (None se la violazione e' globale).
-        giorno      : indice giorno 0-based coinvolto (None se non applicabile).
-    """
+    """Una singola violazione di un vincolo hard."""
 
     law: str
     descrizione: str
@@ -92,40 +54,33 @@ class Violation:
 class FairnessMetrics:
     """
     Esito del Fairness Verification Agent.
-
-    Contiene il punteggio di soddisfazione di ogni lavoratore, le metriche
-    aggregate di equita' (PDF Stage 3: "compute fairness metrics") e,
-    soprattutto, l'identificazione esplicita del lavoratore piu' svantaggiato
-    (punteggio minimo): quest'ultimo e' l'unico dato consumato dalla Fase 4.
+    Contiene le metriche di soddisfazione e identifica il lavoratore piu' svantaggiato.
     """
 
     satisfaction_per_worker: Dict[str, float]
-    # Lavoratore piu' svantaggiato (cuore della Fase 3, input della Fase 4).
-    # E' identificato sulla soddisfazione NORMALIZZATA (vedi sotto), cioe' chi e'
-    # piu' lontano dal PROPRIO ottimo individuale: questo e' il "more disadvantaged
-    # compared to the others" del PDF, equo perche' su scala comune a tutti.
+    # Lavoratore più svantaggiato,
+    # identificato sulla soddisfazione NORMALIZZATA.
     worst_worker_id: str
     worst_worker_name: str
     worst_satisfaction: float
-    # Lavoratore piu' avvantaggiato (estremo opposto, per leggere lo spread).
+    # Lavoratore più avvantaggiato.
     best_worker_id: str
     best_worker_name: str
     best_satisfaction: float
-    # Metriche AGGREGATE di equita' sulla distribuzione della soddisfazione.
-    # Spread e deviazione bassi = distribuzione piu' equa. La Fase 4 lavora
-    # proprio per ridurre lo SPREAD alzando il minimo senza abbassare gli altri.
-    total_satisfaction: float   # soddisfazione complessiva (qualita' globale)
+    # Metriche AGGREGATE di equità sulla distribuzione della soddisfazione.
+    total_satisfaction: float   # soddisfazione complessiva
     mean_satisfaction: float    # media per lavoratore
-    spread: float               # max - min: divario di (dis)uguaglianza
+    spread: float               # max - min: divario di disuguaglianza
     std_satisfaction: float     # deviazione standard (dispersione)
+    
     # --- METRICHE NORMALIZZATE (proportional fairness) ------------------------
     # Soddisfazione in % del massimo individuale di ciascun lavoratore. Sono la
     # base CORRETTA per il confronto tra lavoratori e per il leximin (Fase 4).
     # Affiancate alle assolute per permettere il confronto diretto.
     sat_max_per_worker: Dict[str, float] = field(default_factory=dict)
     satisfaction_pct_per_worker: Dict[str, float] = field(default_factory=dict)
-    worst_pct: float = 0.0      # % del piu' svantaggiato (minimo normalizzato)
-    best_pct: float = 0.0       # % del piu' avvantaggiato (massimo normalizzato)
+    worst_pct: float = 0.0      # % del più svantaggiato (minimo normalizzato)
+    best_pct: float = 0.0       # % del più avvantaggiato (massimo normalizzato)
     mean_pct: float = 0.0       # % media
     spread_pct: float = 0.0     # scarto max-min in %
     std_pct: float = 0.0        # deviazione standard delle %
@@ -150,14 +105,10 @@ class VerificationReport:
     feedback_drafting: Optional[str] = None
 
 
-# ===========================================================================
-# 2. HARD CONSTRAINT VERIFICATION AGENT
-# ===========================================================================
+
 class HardConstraintVerifier:
     """
-    Ricontrolla, in modo indipendente dal builder della Fase 2, tutte le leggi
-    hard sull'output del solver. Ogni metodo `_check_*` aggiunge eventuali
-    `Violation` alla lista; `verify` le restituisce tutte.
+    Ricontrolla, in modo indipendente tutte le leggi hard dal builder della Fase 2.
     """
 
     def __init__(self, data: ProblemData):
@@ -168,19 +119,8 @@ class HardConstraintVerifier:
         self.hours = {s: input_data.SHIFTS[s]["durata_ore"] for s in self.codes}
         self.hc = input_data.HARD_CONSTRAINTS
 
-    # -- validita' del codice turno (rete di sicurezza sul formato) ---------
     def _check_valid_shift_code(self, sched, viol):
-        """
-        Verifica che ogni cella contenga un codice turno ammesso (M/P/N) o None.
-
-        NB: questo NON e' il controllo della legge "max 1 turno al giorno". Quella
-        regola e' garantita PER COSTRUZIONE dalla struttura dello schedule, che
-        mappa ogni (lavoratore, giorno) -> UN SOLO codice: rappresentare due turni
-        nello stesso giorno e' fisicamente impossibile, quindi non c'e' nulla da
-        verificare a runtime. Questo metodo e' invece una guardia di FORMATO: se
-        la sorgente e' esterna o malformata (es. un CSV con un codice 'X' o 'MP')
-        l'anomalia deve emergere come violazione.
-        """
+        """Verifica che ogni cella contenga un codice turno ammesso (M/P/N) o None."""
         for w in self.data.worker_ids:
             for d in range(self.num_days):
                 code = sched[w].get(d)
@@ -260,7 +200,7 @@ class HardConstraintVerifier:
                         f"turno '{code}' assolutamente vietato per il lavoratore",
                         w, d))
 
-    # -- copertura / staffing (dipende dallo use case) ----------------------
+    # -- Controlla se ci sono abbastanza lavoratori per ogni turno (minimo) --
     def _check_staffing(self, sched, viol):
         for d in range(self.num_days):
             for s in self.codes:
@@ -282,9 +222,6 @@ class HardConstraintVerifier:
                             "STAFFING",
                             f"turno {s}: {n_spec} specializzati (min {min_spec})",
                             giorno=d))
-                    # Gli specializzati possono coprire i ruoli standard: i ruoli
-                    # standard richiesti possono essere riempiti da standard oppure
-                    # da specializzati in eccesso rispetto al minimo specializzato.
                     if n_std + n_spec < min_std + min_spec:
                         viol.append(Violation(
                             "STAFFING",
@@ -318,17 +255,11 @@ class HardConstraintVerifier:
         return viol
 
 
-# ===========================================================================
-# 3. FAIRNESS VERIFICATION AGENT
-# ===========================================================================
 class FairnessVerifier:
     """
     Calcola il punteggio di soddisfazione di ogni lavoratore e identifica
     esplicitamente il lavoratore piu' svantaggiato. L'identificazione avviene
-    sulla soddisfazione NORMALIZZATA (% del massimo individuale): cosi' il
-    confronto e' equo tra lavoratori con preferenze e scale diverse, come richiede
-    il PDF ("most disadvantaged compared to the others"). Le metriche assolute
-    restano calcolate e riportate in parallelo per il confronto.
+    sulla soddisfazione NORMALIZZATA (% del massimo individuale).
     """
 
     def __init__(self, data: ProblemData):
@@ -377,14 +308,10 @@ class FairnessVerifier:
         )
 
 
-# ===========================================================================
-# 4. FEEDBACK PER IL DRAFTING AGENT (traccia d'errore -> Fase 4)
-# ===========================================================================
 def build_drafting_feedback(case_label: str, violations: List[Violation]) -> str:
     """
     Costruisce la traccia d'errore strutturata da rimandare al Drafting Agent
-    quando il piano viene RIFIUTATO. Raggruppa le violazioni per legge per
-    rendere il feedback immediatamente azionabile dall'auto-correzione.
+    quando il piano viene RIFIUTATO.
     """
     per_legge: Dict[str, List[Violation]] = {}
     for v in violations:
@@ -406,12 +333,9 @@ def build_drafting_feedback(case_label: str, violations: List[Violation]) -> str
     return "\n".join(righe)
 
 
-# ===========================================================================
-# 5. ORCHESTRAZIONE DELLA FASE 3
-# ===========================================================================
 def verify_schedule(data: ProblemData, result: ScheduleResult) -> VerificationReport:
     """
-    Esegue la Fase 3 completa su una bozza:
+    Esegue la Fase 3 completa su una bozza di schedulazione: 
       1. Hard Constraint Verification Agent -> se viola, RIFIUTA + feedback.
       2. Fairness Verification Agent        -> solo se il piano e' valido.
     """
@@ -437,15 +361,8 @@ def verify_schedule(data: ProblemData, result: ScheduleResult) -> VerificationRe
     )
 
 
-# ===========================================================================
-# 6. CARICAMENTO DI UNA SCHEDULAZIONE DA CSV (output Fase 2)
-# ===========================================================================
 def load_schedule_from_csv(data: ProblemData, path: str) -> ScheduleResult:
-    """
-    Ricostruisce una `ScheduleResult` dal CSV prodotto da
-    `Fase2_drafting_agent.export_csv` (righe = lavoratori, colonne = date).
-    Permette di verificare un piano gia' salvato senza ri-risolvere il modello.
-    """
+    """Ricostruisce una `ScheduleResult` dal CSV prodotto dalla Fase 2."""
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"CSV non trovato: {path}. Genera prima la bozza con la Fase 2 "
@@ -482,9 +399,7 @@ def load_schedule_from_csv(data: ProblemData, path: str) -> ScheduleResult:
     return result
 
 
-# ===========================================================================
-# 7. STAMPA DEL REPORT
-# ===========================================================================
+
 def print_report(data: ProblemData, report: VerificationReport) -> None:
     print(f"\n{'='*64}")
     print(f"FASE 3 - VERIFICA | Caso {report.case_label} "
@@ -517,8 +432,8 @@ def print_report(data: ProblemData, report: VerificationReport) -> None:
     print(f"     {fm.worst_worker_id} ({fm.worst_worker_name}) "
           f"= {fm.worst_pct}% del proprio massimo ({fm.worst_satisfaction} su {fm.sat_max_per_worker.get(fm.worst_worker_id, 0.0)})")
 
-    # Classifica completa (utile per il report finale di consegna): ordinata sulla
-    # scala NORMALIZZATA, con accanto la soddisfazione assoluta e il massimo.
+    # Classifica completa: ordinata sulla scala NORMALIZZATA, 
+    # con accanto la soddisfazione assoluta e il massimo.
     print(f"\n  Classifica per soddisfazione NORMALIZZATA (crescente):")
     print(f"     {'lavoratore':<26}{'norm.%':>8}{'assoluta':>10}{'max':>8}")
     ordinati = sorted(data.worker_ids, key=lambda w: fm.satisfaction_pct_per_worker[w])
@@ -529,9 +444,7 @@ def print_report(data: ProblemData, report: VerificationReport) -> None:
               f"{fm.satisfaction_per_worker[w]:>10}{fm.sat_max_per_worker.get(w, 0.0):>8}{marcatore}")
 
 
-# ===========================================================================
-# 8. MAIN / CLI
-# ===========================================================================
+
 def run_case(case_label: str, from_csv: Optional[str], max_time: float = 30.0
              ) -> VerificationReport:
     """Esegue la Fase 3 per uno use case (genera o carica la bozza, poi verifica)."""
