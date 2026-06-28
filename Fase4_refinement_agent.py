@@ -3,37 +3,21 @@ Fase4_refinement_agent.py
 ===================
 Fase 4 - Raffinamento della Schedulazione (Ciclo Iterativo).
 
-Chiude l'architettura multi-agente di SmartScheduler implementando il ciclo
-di ottimizzazione dell'equita' descritto nel PROJECT_CONTEXT.md:
+Implementa il ciclo di ottimizzazione dell'equità:
+  - *Feedback*: Reistruisce il Drafting Agent per migliorare il lavoratore meno soddisfatto.
+  - *Vincolo*: Non peggiorare la soddisfazione minima attuale e rispettare i vincoli hard.
+  - *Terminazione*: Si ferma quando non è possibile migliorare ulteriormente o si raggiunge `max_iterations`.
 
-  - *Prompt di Feedback*: il Drafting Agent viene reistruito a raffinare la
-    bozza CORRENTE con l'obiettivo specifico di migliorare la soddisfazione del
-    *lavoratore meno soddisfatto* identificato dalla Fase 3.
-  - *Vincolo di ottimizzazione*: il raffinamento NON DEVE far scendere nessun
-    altro lavoratore sotto il livello minimo di soddisfazione attuale; tutti i
-    vincoli hard restano LEGGI inviolabili.
-  - *Terminazione*: il criterio PRIMARIO (quello del PDF) e' "finche' nessun
-    ulteriore miglioramento dell'equita' e' possibile": il ciclo si ferma quando
-    il solutore restituisce INFEASIBLE forzando un pavimento piu' alto, oppure
-    quando il minimo globale non migliora piu'. Il limite `max_iterations` e'
-    invece una SALVAGUARDIA secondaria (anti-loop e anti-costo: ogni iterazione
-    e' una chiamata LLM), tarata alta perche' la terminazione avvenga di norma
-    in modo naturale e non per taglio del tetto.
+Flusso iterativo:
+    1. Crea un prompt con il codice corrente per migliorare il lavoratore peggiore.
+    2. Esegue il nuovo codice tramite AgentExecutor.
+    3. Valida il risultato con il Verification Agent.
+    4. Accetta la bozza se i vincoli sono rispettati e il minimo globale migliora; scarta altrimenti.
 
-Flusso di un'iterazione:
-    1. costruisce un prompt che INCLUDE il codice cp_model della bozza corrente
-       e chiede di migliorare il lavoratore peggiore senza danneggiare gli altri;
-    2. esegue il nuovo codice con AgentExecutor.run_with_retry (motore Fase 0);
-    3. ricostruisce la ScheduleResult e la passa al Verification Agent (Fase 3);
-    4. se i vincoli hard sono violati -> SCARTA la bozza;
-       se sono rispettati e il nuovo minimo globale e' MIGLIORE -> ACCETTA la
-       bozza come nuovo orario di riferimento.
-
-Esecuzione (richiede la variabile d'ambiente GEMINI_API_KEY):
+Esecuzione:
     python Fase4_refinement_agent.py --case A
-    python Fase4_refinement_agent.py --case B --max-iterations 3
-    # Riparte da una bozza gia' salvata (CSV + .txt del codice) senza ri-fase 2:
-    python Fase4_refinement_agent.py --case A --from-draft
+    python Fase4_refinement_agent.py --case B 
+    
 """
 
 import argparse
@@ -64,9 +48,7 @@ from Fase3_verification_agent import (
 
 # Risoluzione della scala NORMALIZZATA usata dal leximin: la soddisfazione
 # normalizzata norm(w)=sat(w)/sat_max(w) e' rappresentata come intero z ~
-# norm*NORM_SCALE (100 = 100%, risoluzione 1%). Permette di scrivere il vincolo
-# max-min in forma LINEARE intera: z*SAT_MAX_SCALED[w] <= sat(w)*NORM_SCALE,
-# mantenendo i coefficienti del modello CP contenuti.
+# Permette di scrivere il vincolo max-min in forma LINEARE intera mantenendo i coefficienti del modello CP contenuti.
 NORM_SCALE = 100
 
 
@@ -81,21 +63,17 @@ def build_refinement_prompt(
 ) -> str:
     """
     Costruisce il prompt che chiede all'LLM (Drafting Agent reistruito) di scrivere
-    UNA VOLTA un modello cp_model **leximin parametrico**: l'obiettivo non e' piu'
-    la somma utilitaristica (che lasciava il peggiore inchiodato), ma la
-    MASSIMIZZAZIONE DEL MINIMO (Max-Min Fairness, Stage 4 del PDF).
+    UNA VOLTA un modello cp_model **leximin parametrico**: l'obiettivoè la
+    MASSIMIZZAZIONE DEL MINIMO.
 
     Il modello generato e' parametrico: legge dal namespace `LOCKED_FLOORS`,
     `FREE_WORKERS` e `CURRENT_ASSIGN`, cosi' che il ciclo di raffinamento
     (run_refinement_loop) possa RI-ESEGUIRE lo STESSO codice a ogni livello
     leximin aggiornando solo quelle variabili, senza una nuova chiamata LLM.
 
-    - `LOCKED_FLOORS[w]` : pavimento HARD (scalato) per i lavoratori gia' fissati
-      ai livelli leximin precedenti (la loro soddisfazione non puo' piu' scendere).
-    - `FREE_WORKERS`     : lavoratori ancora da ottimizzare; il modello ne
-      massimizza il minimo.
-    - `CURRENT_ASSIGN`   : la schedule corrente (dict {(w,d,s): 0/1}) usata come
-      warm-start (AddHint): senza questo hint il modello esatto ==25 e' lentissimo
+    - `LOCKED_FLOORS[w]` : per i lavoratori gia' fissati ai livelli leximin precedenti (la loro soddisfazione non puo' piu' scendere).
+    - `FREE_WORKERS`: lavoratori ancora da ottimizzare; il modello ne massimizza il minimo.
+    - `CURRENT_ASSIGN`   : la schedule corrente: senza questo hint il modello esatto ==25 e' lentissimo
       a trovare il primo punto fattibile (puo' dare UNKNOWN).
     """
     # Riepilogo compatto delle preferenze (informativo per l'LLM).
@@ -262,12 +240,10 @@ class RefinementOutcome:
     best_report: VerificationReport
     steps: List[RefinementStep] = field(default_factory=list)
     # Vettori di soddisfazione per lavoratore PRIMA e DOPO il leximin: servono a
-    # mostrare il guadagno reale (il leximin solleva l'intera fascia bassa, non
-    # solo il minimo assoluto, che puo' essere gia' al suo tetto strutturale).
+    # mostrare il guadagno reale.
     initial_satisfaction: Dict[str, float] = field(default_factory=dict)
     final_satisfaction: Dict[str, float] = field(default_factory=dict)
-    # Stessi vettori in versione NORMALIZZATA (% del massimo individuale): sono la
-    # vista corretta per leggere il guadagno di equita' (criterio del leximin).
+    # Stessi vettori in versione NORMALIZZATA: sono la vista corretta per leggere il guadagno di equita'.
     initial_worst_pct: float = 0.0
     final_worst_pct: float = 0.0
     initial_satisfaction_pct: Dict[str, float] = field(default_factory=dict)
@@ -291,7 +267,7 @@ def _build_refinement_context(
     current_assign: dict,
 ) -> dict:
     """
-    Namespace di esecuzione del template leximin: contesto della bozza (vincoli,
+    Namespace di esecuzione del template leximin: contesto (vincoli,
     pesi, ferie) + le variabili PARAMETRICHE che il ciclo aggiorna a ogni livello
     (pavimenti dei lavoratori fissati, lavoratori liberi, warm-start corrente).
     """
@@ -300,14 +276,14 @@ def _build_refinement_context(
     ctx["LOCKED_FLOORS"] = dict(locked_floors)
     ctx["FREE_WORKERS"] = list(free_workers)
     ctx["CURRENT_ASSIGN"] = current_assign
-    # Scala normalizzata: massimo individuale scalato a intero (>=1) e risoluzione.
+    # Scala normalizzata: massimo individuale scalato a intero (>=1).
     ctx["SAT_MAX_SCALED"] = _sat_max_scaled(data)
     ctx["NORM_SCALE"] = NORM_SCALE
     return ctx
 
 
 def _sat_max_scaled(data: ProblemData) -> Dict[str, int]:
-    """Massimo individuale di soddisfazione, scalato a intero (>=1) per il leximin."""
+    """Massimo individuale di soddisfazione"""
     sat_max = compute_sat_max(data)
     return {
         w: max(int(round(sat_max.get(w, 0.0) * SATISFACTION_SCALE)), 1)
@@ -317,9 +293,7 @@ def _sat_max_scaled(data: ProblemData) -> Dict[str, int]:
 
 def _assign_from_result(data: ProblemData, result: ScheduleResult) -> dict:
     """
-    Traduce una schedule in hint per il warm-start: {(wid, giorno, turno): 0/1}.
-    E' la schedule da cui il livello leximin successivo riparte (carry del
-    warm-start), indispensabile per non ricadere in UNKNOWN sul modello ==25.
+    Traduce una schedule in hint per il warm-start, indispensabile per non ricadere in UNKNOWN sul modello ==25.
     """
     assign = {}
     for w in data.worker_ids:
@@ -348,28 +322,18 @@ def run_refinement_loop(
     max_retries: int = 3,
 ) -> RefinementOutcome:
     """
-    Esegue il ciclo di raffinamento LEXIMIN (Max-Min Fairness, Stage 4 del PDF)
-    partendo da una bozza gia' verificata valida (initial_report.hard_ok == True).
+    Esegue il ciclo di raffinamento LEXIMIN partendo da una bozza valida.
 
-    Architettura (Opzione 1, "template parametrico"):
-    - l'LLM scrive UNA VOLTA il modello leximin parametrico (vedi
-      build_refinement_prompt): massimizza il MINIMO di soddisfazione tra i
-      lavoratori liberi, con i lavoratori gia' fissati tenuti sopra il loro
-      pavimento hard, e warm-start dalla schedule corrente;
-    - il ciclo (questa funzione) e' il vero "agente di raffinamento": a ogni
-      LIVELLO leximin determina il minimo raggiunto, FISSA i lavoratori vincolanti
-      a quel pavimento, aggiorna il warm-start e RI-ESEGUE lo stesso template
-      (senza nuova chiamata LLM) per sollevare il livello successivo.
+    Flusso:
+    - L'LLM genera UNA VOLTA il modello parametrico che massimizza il minimo per i liberi.
+    - Il ciclo determina il minimo, fissa i lavoratori vincolanti a quel livello, 
+      aggiorna il warm-start e riesegue il solver (senza chiamate LLM).
+    
+    Perché leximin: massimizzando il minimo si solleva direttamente la fascia bassa, 
+    mentre la somma lascia indietro i peggiori.
 
-    Perche' leximin e non "somma + pavimento +0.1": massimizzando la somma il
-    solver lascia il peggiore inchiodato (premia chi e' gia' soddisfatto); il
-    max-min lo solleva direttamente, e fissando i vincolanti si risale tutta la
-    fascia bassa (non solo il minimo assoluto, che puo' essere al suo tetto
-    strutturale -> in quel caso il livello successivo migliora comunque gli altri).
-
-    Terminazione NATURALE: tutti i lavoratori fissati (leximin completo), oppure
-    solver INFEASIBLE/UNKNOWN, oppure il minimo dei liberi non supera il pavimento
-    gia' bloccato. `max_iterations` resta solo SALVAGUARDIA (anti-loop/costo LLM).
+    Terminazione: Tutti fissati, solver INFEASIBLE/UNKNOWN, o nessun miglioramento. 
+    `max_iterations` è solo una salvaguardia.
     """
     if not initial_report.hard_ok or initial_report.fairness is None:
         raise ValueError(
@@ -386,8 +350,7 @@ def run_refinement_loop(
     worker_ids = list(data.worker_ids)
     initial_sat = dict(initial_result.satisfaction_per_worker)
     initial_worst = initial_report.fairness.worst_satisfaction
-    # Scala normalizzata (proportional fairness): denominatore individuale e
-    # vettore % di partenza. Il leximin ottimizza il MINIMO NORMALIZZATO.
+    # Il leximin ottimizza il MINIMO NORMALIZZATO.
     sat_max_scaled = _sat_max_scaled(data)
     initial_worst_pct = initial_report.fairness.worst_pct
     initial_pct = dict(initial_report.fairness.satisfaction_pct_per_worker)
@@ -396,12 +359,12 @@ def run_refinement_loop(
     best_result = initial_result
     best_report = initial_report
     reference_code = initial_result.generated_code   # solo per i vincoli hard
-    template_code = None                             # codice leximin (1 sola gen LLM)
-    locked_floors: Dict[str, int] = {}               # wid -> pavimento scalato
+    template_code = None                             
+    locked_floors: Dict[str, int] = {}               
     free = list(worker_ids)                          # lavoratori ancora da ottimizzare
-    current_assign = _assign_from_result(data, initial_result)  # warm-start corrente
+    current_assign = _assign_from_result(data, initial_result)  
     last_floor_scaled = None                         # pavimento del livello precedente
-    current_max_time = max_time                      # timer dinamico
+    current_max_time = max_time                      
     last_objective_score = None                      # tracking stallo (z_star, total_sum)
 
     steps: List[RefinementStep] = []
@@ -427,9 +390,9 @@ def run_refinement_loop(
               f"fissati={len(locked_floors)}")
         print(f"{'-'*64}")
 
-        # --- STEP 1+2: ottieni ed esegui il template leximin ---
+        # STEP 1+2: ottieni ed esegui il template leximin
         # Prima volta -> genera con l'LLM; volte successive -> ri-esegui lo stesso
-        # codice aggiornando solo il namespace (nessuna nuova chiamata LLM).
+        # codice aggiornando solo il namespace.
         if template_code is None:
             prompt = build_refinement_prompt(data, reference_code, locked_floors, free)
             successo, risultato = executor.run_with_retry(
@@ -478,7 +441,7 @@ def run_refinement_loop(
                 detail="Solver INFEASIBLE/UNKNOWN su questo livello."))
             break
 
-        # --- STEP 3: Verification Agent (Fase 3) ---
+        # STEP 3: Verification Agent (Fase 3)
         candidate_report = verify_schedule(data, candidate)
         if not candidate_report.hard_ok:
             print(f"[X] Livello SCARTATO: {len(candidate_report.violations)} "
@@ -513,7 +476,7 @@ def run_refinement_loop(
 
         if is_stuck:
             if current_max_time <= max_time:
-                # Tentativo profondo
+                # Tentativo approfondito
                 current_max_time = max_time * 2
                 print(f"[!] Nessun progresso oggettivo rilevato. Raddoppio il tempo a {current_max_time}s per un 'Deep Dive'.")
                 steps.append(RefinementStep(
@@ -533,7 +496,7 @@ def run_refinement_loop(
 
         # Se ci siamo sbloccati o abbiamo migliorato senza esserci arenati prima
         if current_score != last_objective_score and not is_optimal:
-            current_max_time = max_time # reset timer if it was doubled
+            current_max_time = max_time 
             last_objective_score = current_score
 
         # Blocchiamo il livello SOLO se il solutore ha certificato l'ottimalita' (o forzato)
@@ -555,7 +518,7 @@ def run_refinement_loop(
                 free.remove(w)
 
             last_floor_scaled = z_star
-            last_objective_score = None # Reset tracking for the new level
+            last_objective_score = None 
             current_max_time = max_time
 
             print(f"[OK] Livello bloccato. Minimo normalizzato dei liberi confermato a {z_star_pct}%; "
@@ -579,7 +542,7 @@ def run_refinement_loop(
     final_pct = dict(best_report.fairness.satisfaction_pct_per_worker)
     # "improved" in senso leximin sulla scala NORMALIZZATA: il vettore delle % di
     # soddisfazione ordinato in modo crescente e' lessicograficamente migliore (il
-    # minimo normalizzato sale, o a parita' di minimo sale il secondo peggiore...).
+    # minimo normalizzato sale, o a parita' di minimo sale il secondo peggiore).
     improved = sorted(final_pct.values()) > sorted(initial_pct.values())
 
     return RefinementOutcome(
@@ -622,8 +585,7 @@ def print_refinement_summary(data: ProblemData, outcome: RefinementOutcome) -> N
         print(f"  [{s.iteration}] {s.status:<18} status_solver={s.solver_status}"
               f"{delta} | {s.detail}")
 
-    # Confronto leximin PRIMA vs DOPO, su ENTRAMBE le scale: assoluta (modello di
-    # base) e normalizzata (% del massimo individuale = criterio di equita').
+    # Confronto leximin PRIMA vs DOPO, su ENTRAMBE le scale: assoluta e normalizzata 
     ini = outcome.initial_satisfaction
     fin = outcome.final_satisfaction
     ini_p = outcome.initial_satisfaction_pct
@@ -674,11 +636,11 @@ def run_case(
     """
     data = load_problem_data(case_label)
 
-    # Inferenza via Google Gemini 2.5 Flash: richiede GEMINI_API_KEY.
+    
     from llm_engine import AgentExecutor
     executor = AgentExecutor()
 
-    # --- Bozza iniziale (Fase 2) ---
+    # Bozza iniziale (Fase 2) 
     if from_draft:
         print(f"[*] Carico la bozza iniziale da disco (Caso {case_label})...")
         initial_result = _load_draft_from_disk(data)
@@ -695,7 +657,7 @@ def run_case(
                 f"[!] La Fase 2 non ha prodotto una bozza per il Caso {case_label}."
             )
 
-    # --- Verifica iniziale (Fase 3) ---
+    # Verifica iniziale (Fase 3) 
     print(f"\n[*] Verifica della bozza iniziale (Fase 3)...")
     initial_report = verify_schedule(data, initial_result)
     print_report(data, initial_report)
@@ -705,13 +667,13 @@ def run_case(
               "(Fase 4) parte solo da un piano valido. Interrompo.")
         return None
 
-    # --- Ciclo di raffinamento (Fase 4) ---
+    # Ciclo di raffinamento (Fase 4) 
     outcome = run_refinement_loop(
         executor, data, initial_result, initial_report,
         max_iterations=max_iterations, max_time=max_time,
     )
 
-    # --- Salvataggio dell'orario di riferimento finale ---
+    # Salvataggio dell'orario di riferimento finale 
     final_csv = f"schedule_case_{case_label}_final.csv"
     export_csv(data, outcome.best_result, path=final_csv)
     if outcome.best_result.generated_code:
