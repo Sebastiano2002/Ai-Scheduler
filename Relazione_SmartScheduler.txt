@@ -54,12 +54,14 @@
     \vspace{2.5cm}
     
     % Titolo del Progetto
-    {\huge\bfseries Un sistema multi-agente neuro-simbolico per la pianificazione equa dei turni ospedalieri \par}
-    \vspace{0.6cm}
+    {\Huge\bfseries SmartScheduler \par }
+    \vspace{0.4cm}
+    {\Large Un sistema multi-agente neuro-simbolico per la pianificazione equa dei turni ospedalieri \par }
+    \vspace{3cm}
     {\Large Relazione Tecnica Finale \par}
     \vspace{0.3cm}
     {\large Corso di Intelligenza Artificiale \par}
-    
+    \vspace{3cm}
     \vfill
     
     % Blocco Autori e Matricole ben allineato
@@ -74,11 +76,11 @@
     \vspace{1cm}
     
     % Anno Accademico in fondo
-    {\large Anno Accademico 2024/2025 \par} 
+    {\large Anno Accademico 2025/2026 \par} 
 \end{titlepage}
 % --- FINE FRONTESPIZIO ---
 
-\newpage
+
 
 % Da qui puoi inserire l'Abstract e l'Indice come avevi fatto prima:
 \begin{abstract}
@@ -113,17 +115,16 @@ soddisfazione normalizzata del lavoratore più svantaggiato dal 44\% al 52\% (Ca
 \newpage
 \tableofcontents
 
-\newpage
+
 % Inizio dei capitoli della relazione...
 
 
 
 
 
-
-
-
 \newpage
+
+
 
 % ===========================================================================
 \section{Introduzione}
@@ -230,21 +231,19 @@ Orizzonte                  & 31 gg & 07/12/2026 -- 06/01/2027 \\
 \subsection{Validazione strutturata con Pydantic}
 Poiché l'output dell'LLM (generato durante la Fase 1) funge da input per il solutore matematico (Fase 2), è stato inserito uno strato intermedio di validazione tramite la libreria \textbf{Pydantic}. Questo strato agisce da "filtro a membrana": previene e blocca incoerenze logiche e semantiche prima ancora che raggiungano il motore matematico. In questo modo, l'output probabilistico viene trasformato in strutture dati fortemente tipizzate, garantendo la totale affidabilità del flusso dei dati per gli agenti a valle.
 
-\subsection{Infrastruttura di esecuzione: il ``Ponte di Comando''}
+\subsection{Infrastruttura di esecuzione}
 L'intero flusso è orchestrato dal modulo \texttt{llm\_engine.py}, che contiene la classe \texttt{AgentExecutor}. Questo motore centralizzato gestisce la comunicazione con le API di Google Gemini (versione 2.5 Flash) e fornisce un ambiente di esecuzione sicuro (\texttt{safe\_execute}) in cui il codice Python generato dinamicamente viene valutato in un namespace isolato. 
+Abbiamo scelto Gemini 2.5 Flash perché, a livello di tier gratuito studentesco, offre il miglior trade-off tra velocità e capacità di coding.
 L'aspetto più innovativo dell'infrastruttura è il meccanismo di \textbf{self-healing} (auto-guarigione): qualora l'LLM generi codice con errori sintattici o logici (es. causando eccezioni a runtime), l'engine cattura il \emph{traceback} e lo re-invia all'IA, istruendola ad auto-correggersi. Questo ciclo garantisce stabilità e autonomia, riducendo drasticamente la necessità di intervento umano.
 
 
-
 \begin{figure}[H]
-\centering
-\fbox{\parbox{0.8\textwidth}{\centering\vspace{1.8cm}
-\textit{[Figura 2] Diagramma di flusso del ciclo di auto-correzione\\
-\texttt{run\_with\_retry}: genera $\to$ esegue $\to$ (se errore) reinvia il traceback all'LLM.}
-\vspace{1.8cm}}}
-\caption{Ciclo agentic di generazione ed auto-correzione del codice.}
-\label{fig:retry}
+    \centering
+    \includegraphics[width=0.7\linewidth]{Foto/Diagramma_verifica.png}
+    \caption{Ciclo agentic di generazione ed auto-correzione del codice.}
+    \label{fig:placeholder}
 \end{figure}
+
 
 \subsection{Perché modelli in cloud e non in locale}
 
@@ -260,23 +259,16 @@ A corredo della pipeline è stata realizzata una GUI con \texttt{customtkinter} 
 
 
 
-
-
 \begin{figure}[H]
-\centering
-\fbox{\parbox{0.7\textwidth}{\centering\vspace{1.6cm}
-\textit{[Figura 3] Screenshot della GUI (customtkinter) con il pannello\\
-di log in tempo reale durante l'esecuzione di un caso.}
-\vspace{1.6cm}}}
-\caption{Interfaccia grafica del sistema.}
-\label{fig:gui}
+    \centering
+    \includegraphics[width=1\linewidth]{Foto/Gui.png}
+    \caption{Interfaccia grafica del sistema.}
+    \label{fig:placeholder}
 \end{figure}
 
 
 
 
-
-\newpage
 % ===========================================================================
 \section{Analisi delle quattro fasi}
 \label{sec:fasi}
@@ -369,8 +361,12 @@ La variabile decisionale fondamentale è booleana:
 x_{w,d,s} \in \{0,1\}, \qquad
 x_{w,d,s}=1 \iff \text{il lavoratore } w \text{ lavora il giorno } d \text{ nel turno } s.
 \]
+
 Su questa base vengono codificati i vincoli hard, riportati sinteticamente nel listing ~\ref{lst:hard}.
-\\
+
+\newpage
+
+
 \begin{lstlisting}[caption={Codifica dei vincoli hard in CP-SAT (estratto dal codice
 generato).},label={lst:hard}]
 # Al piu' 1 turno al giorno per lavoratore
@@ -473,7 +469,7 @@ Poiché il solutore CP-SAT opera in dominio intero, per calcolare la percentuale
 z \cdot \text{sat}_{\max}(w) \le \text{sat}(w) \cdot \text{NORM\_SCALE}
 \]
 
-\paragraph{Bounded Leximin).} Per evitare i classici "bagni di sangue" di un Leximin puro (con un peso su $z$ infinito) che porterebbero il solutore a distruggere completamente la soddisfazione di tutti i lavoratori pur di innalzare l'ultimo in classifica di un $0.1\%$ abbiamo implementato un \textbf{Bounded Leximin}. 
+\paragraph{Bounded Leximin.} Per evitare i classici "bagni di sangue" di un Leximin puro (con un peso su $z$ infinito) che porterebbero il solutore a distruggere completamente la soddisfazione di tutti i lavoratori pur di innalzare l'ultimo in classifica di un $0.1\%$ abbiamo implementato un \textbf{Bounded Leximin}. 
 La funzione massimizza la soddisfazione totale, ma il coefficiente che moltiplica $z$ è stato calibrato a \texttt{BIG = 15}. In questo modo, informiamo l'algoritmo che siamo disposti a sacrificare \textbf{al massimo 1.5 punti} di soddisfazione assoluta globale pur di regalare \textbf{1 punto percentuale} (1 unità di $z$) al lavoratore più svantaggiato. Oltre quella soglia, il solutore rinuncia allo scambio, garantendo un compromesso tra equità ed efficienza.
 
 \paragraph{Il Ciclo Parametrico e l'Esecuzione.} Il cuore della Fase 4 è il ciclo implementato in \texttt{run\_refinement\_loop}, che applica concretamente la logica leximin "a gradini". Una volta che il solutore ha innalzato al massimo la soddisfazione del lavoratore più svantaggiato, quel punteggio viene bloccato diventando un \textbf{pavimento} sotto al quale non si può scendere. Il lavoratore viene quindi spostato nell'insieme \texttt{LOCKED\_FLOORS} e l'obiettivo dell'algoritmo scala automaticamente sulla massimizzazione del minimo dei lavoratori restanti (\texttt{FREE\_WORKERS}). Durante le iterazioni successive il sistema \textbf{non interroga nuovamente l'LLM}. Al contrario, il motore Python \textbf{ri-esegue lo stesso identico blocco di codice CP-SAT} generato al primo step, limitandosi ad aggiornare "dietro le quinte" le variabili iniettate nel \textit{namespace} di esecuzione. Oltre alle liste dei lavoratori, il sistema inietta a ogni ciclo l'assegnamento corrente (\texttt{CURRENT\_ASSIGN}): questo permette al solutore di fare un \textbf{warm-start} partendo dalla schedule ottimale del livello precedente, abbattendo drasticamente i tempi di calcolo. Questa strategia di iniezione parametrica porta enormi vantaggi: azzera i costi delle chiamate API, abbatte le latenze di rete, evita i timeout del solutore e annulla completamente il rischio che l'LLM possa introdurre errori sintattici nei cicli successivi o che possa allucinare. Il ciclo termina naturalmente quando l'ottimizzatore matematico dimostra che non è più possibile innalzare il livello del peggior lavoratore senza causare un danno collettivo superiore al limite massimo consentito dal parametro \texttt{BIG}.
@@ -657,6 +653,13 @@ Notte (N)      & 96  & 192 \\
 \end{tabular}
 \end{table}
 
+\subsection{Analisi delle Prestazioni Computazionali}
+I tempi di interazione con l'LLM si sono mantenuti costanti in entrambi gli scenari (circa 30-40 secondi), poiché dipendono esclusivamente dalla connessione e dai tempi di risposta del cloud. Il calcolo matematico (CP-SAT), invece, scala in base alla difficoltà: nel Caso A ha trovato la soluzione in pochi secondi, mentre nel Caso B la presenza di lavoratori specializzati e vincoli incrociati ha richiesto uno sforzo maggiore, portando il solutore a sfruttare in modo efficiente l'intero budget temporale a sua disposizione (fino ai 120 secondi massimi previsti dalle nostre euristiche per i livelli più complessi). Questa dinamica conferma che il sistema funziona esattamente come progettato: l'intelligenza artificiale gestisce agilmente il lavoro di "traduzione", lasciando il calcolo pesante interamente al motore matematico.
+
+
+
+
+
 \subsection{Discussione complessiva}
 
 Su entrambi i casi il sistema raggiunge i tre obiettivi della traccia: (1)~genera piani \textbf{validi al 100\%} sui vincoli hard, certificati da un verificatore indipendente; (2)~massimizza la soddisfazione tenendo conto delle preferenze formalizzate; (3)~migliora l'equità secondo il criterio leximin, \emph{senza} degradare il benessere collettivo (anzi, aumentandolo). La robustezza dell'approccio neuro-simbolico è confermata dal fatto che le garanzie matematiche non dipendono mai dalla ``buona fede'' dell'LLM, ma da componenti formali deterministici.
@@ -664,7 +667,7 @@ Su entrambi i casi il sistema raggiunge i tre obiettivi della traccia: (1)~gener
 
 
 
-\newpage
+
 
 % ===========================================================================
 \section{Scenari futuri e possibili estensioni}
@@ -699,7 +702,7 @@ Il passo successivo consiste nel passare dalla generazione di script completi al
 
 
 
-\newpage
+
 % ===========================================================================
 \section{Conclusioni}
 \label{sec:conclusioni}

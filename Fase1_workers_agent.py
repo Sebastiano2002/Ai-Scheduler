@@ -14,7 +14,7 @@ Questo script implementa l'agente che:
        'formalized_preferences_case_B.py'.
         L'output formalizzato distingue ESPLICITAMENTE due strutture parallele:
         - HARD_CONSTRAINTS (vincoli inderogabili)
-- SOFT_CONSTRAINTS (preferenze + modello di soddisfazione).
+        - SOFT_CONSTRAINTS (preferenze + modello di soddisfazione).
 """
 
 import pprint
