@@ -143,7 +143,7 @@ protagonista: nella Fase~1 interpreta le descrizioni testuali dei lavoratori e l
 in strutture dati validate (turni vietati per motivi medici, pesi di soddisfazione per
 tipo di turno, punteggi di flessibilità); nella Fase~2 genera il codice di un modello CP-SAT che codifica vincoli e
 funzione obiettivo. La correttezza della soluzione non dipende però dall'LLM: il
-risolutore CP-SAT (Fase~2) trova la soluzione ottimale nel rispetto dei vincoli, e un
+risolutore CP-SAT (Fase~2) trova una prima soluzione nel rispetto dei vincoli, e un
 verificatore deterministico (Fase~3) ricontrolla ogni vincolo da capo, in modo indipendente
 dal builder che ha costruito il modello. Se anche una sola violazione viene rilevata, il
 piano è respinto. La Fase~4 raffina iterativamente l'equità con criterio \emph{leximin}:
@@ -192,15 +192,15 @@ conclusioni.
 \label{sec:design}
 % ===========================================================================
 
-Il design architetturale di \textit{SmartScheduler} è fondato su una rigorosa separazione delle responsabilità (\emph{Separation of Concerns}). L'obiettivo è sfruttare la versatilità dei Large Language Models (LLM) per l'interpretazione del linguaggio naturale e per la generazione dinamica, confinando però il loro output all'interno di binari deterministici per garantire l'affidabilità e l'esattezza richieste da un sistema di pianificazione ospedaliera.
+Il design architetturale di \textit{SmartScheduler} è fondato su una rigorosa separazione delle responsabilità. L'obiettivo è sfruttare la versatilità dei Large Language Models (LLM) per l'interpretazione del linguaggio naturale e per la generazione dinamica, confinando però il loro output all'interno di binari deterministici per garantire l'affidabilità e l'esattezza richieste da un sistema di pianificazione ospedaliera.
 
 \subsection{Architettura Neuro-Simbolica}
-Il sistema è costruito attorno a due anime complementari:
+Il sistema è costruito attorno a due componenti:
 \begin{itemize}[noitemsep]
     \item \textbf{La componente "Neurale" (LLM)}: Interagisce con il testo non strutturato (preferenze dei lavoratori) e genera configurazioni logiche o codice sorgente. È impiegata esclusivamente dove l'euristica e l'interpretazione semantica sono imprescindibili (es. traduzione delle preferenze, stesura del modello CP-SAT).
     \item \textbf{La componente "Simbolica" (Solutore ed Esecutore)}: È costituita dai motori deterministici, come \texttt{OR-Tools} per la risoluzione matematica e \texttt{Python} per l'esecuzione del codice, che garantiscono la correttezza del piano e il rigoroso rispetto dei vincoli.
 \end{itemize}
-Questa separazione evita di chiedere all'IA di calcolare attivamente la soluzione del problema NP-hard, delegando a essa unicamente il compito di \emph{traduttrice} (dei requisiti) e \emph{modellatrice} (del codice per il solutore).
+Questa separazione evita di chiedere all'LLM di calcolare attivamente la soluzione del problema NP-hard, delegando ad esso unicamente il compito di \emph{traduttore} (dei requisiti) e \emph{modellatore} (del codice per il solutore).
 
 
 
@@ -247,7 +247,7 @@ L'aspetto più innovativo dell'infrastruttura è il meccanismo di \textbf{self-h
 
 \subsection{Perché modelli in cloud e non in locale}
 
-A causa delle limitazioni hardware dell'ambiente di sviluppo (memoria GPU/VRAM insufficiente per eseguire in locale modelli di classe "coder" con latenze accettabili), si è optato per un'architettura interamente basata su \textbf{cloud}. L'uso dell'API remota ha però richiesto attenzioni ingegneristiche specifiche, recepite in
+A causa delle limitazioni hardware dell'ambiente di sviluppo (memoria GPU/VRAM insufficiente per eseguire in locale modelli di classe "coder" con latenze accettabili), si è optato per un'architettura interamente basata su \textbf{cloud}. L'uso dell'API remota ha però richiesto attenzioni specifiche, recepite in
 \texttt{generate\_and\_extract}: gestione del \emph{rate limiting} (HTTP~429) con
 \textbf{backoff} crescente (30s, 60s, 90s), e impostazione di una \texttt{temperature} bassa
 (0.1) per rendere la generazione di codice il più deterministica e riproducibile possibile.
@@ -274,7 +274,7 @@ A corredo della pipeline è stata realizzata una GUI con \texttt{customtkinter} 
 \label{sec:fasi}
 % ===========================================================================
 
-In questa sezione viene dettagliata l'architettura multi-agente alla base di \textit{SmartScheduler}, strutturata in quattro fasi sequenziali progettate per trasformare richieste informali in una pianificazione ottima ed equa. Verrà dapprima illustrata la \textbf{Fase 1}, dedicata all'estrazione e alla rigorosa formalizzazione dei vincoli e delle preferenze dei lavoratori a partire dal linguaggio naturale. Successivamente, la \textbf{Fase 2} mostrerà come un Large Language Model (LLM) venga istruito per generare dinamicamente un modello di Constraint Programming utile a redigere una prima bozza allocativa. La \textbf{Fase 3} si concentrerà sulla verifica matematica e indipendente dei vincoli \textit{hard} e sul calcolo delle metriche di equità. Infine, la \textbf{Fase 4} descriverà il ciclo iterativo di raffinamento basato sul criterio di \textit{Max-Min Fairness}, volto a massimizzare la soddisfazione dei lavoratori più svantaggiati senza mai compromettere la validità globale della soluzione.
+In questa sezione viene dettagliata l'architettura multi-agente alla base di \textit{SmartScheduler}, strutturata in quattro fasi sequenziali progettate per trasformare richieste informali in una pianificazione equa. Verrà dapprima illustrata la \textbf{Fase 1}, dedicata all'estrazione e alla rigorosa formalizzazione dei vincoli e delle preferenze dei lavoratori a partire dal linguaggio naturale. Successivamente, la \textbf{Fase 2} mostrerà come un Large Language Model (LLM) venga istruito per generare dinamicamente un modello di Constraint Programming utile a redigere una prima bozza allocativa. La \textbf{Fase 3} si concentrerà sulla verifica matematica e indipendente dei vincoli \textit{hard} e sul calcolo delle metriche di equità. Infine, la \textbf{Fase 4} descriverà il ciclo iterativo di raffinamento basato sul criterio di \textit{Max-Min Fairness}, volto a massimizzare la soddisfazione dei lavoratori più svantaggiati senza mai compromettere la validità globale della soluzione.
 
 
 % ---------------------------------------------------------------------------
@@ -438,7 +438,7 @@ dove $\text{sat}_{\max}(w)$ è la massima soddisfazione teoricamente ottenibile 
 Per calcolare questo denominatore vitale (\texttt{compute\_sat\_max}), il \textit{Verification Agent} istanzia silenziosamente \textbf{un modello CP-SAT dedicato} per ogni singolo dipendente. Questo mini-solutore riceve in input esclusivamente i vincoli hard istituzionali e i divieti medici del lavoratore in esame, ignorando del tutto i vincoli di copertura del reparto e gli incastri con i colleghi. L'obiettivo è calcolare il punteggio massimo che quel lavoratore otterrebbe ipotizzando sia l'unico a lavorare.
 Il "lavoratore più svantaggiato" viene quindi eletto misurando la \textbf{percentuale} di soddisfazione rispetto al proprio massimo. Questo garantisce un giudizio equo su una scala percentuale comune a tutti, e fornisce alla successiva Fase~4 il target logico da ottimizzare.
 
-La scelta di calcolare la soddisfazione normalizzata ci aiuta anche a non sprecare risorse temporali inutili, in quanto, se un worker è quasi completamente soddisfatto, cercare degli schedule che massimizzino la sua soddisfazione diventa complicato se non del tutto impossibile cercando di rispettare tutti i vincoli hard e soft. Usando il seguente metodo siamo dunque in grado di concentrarci su lavoratori che abbiano probabilità di avere la propria soddisfazione innalzata più elevate.
+La scelta di calcolare la soddisfazione normalizzata ci aiuta anche a non sprecare risorse temporali inutili, in quanto, se un worker è quasi completamente soddisfatto, cercare degli schedule che massimizzino la sua soddisfazione diventa complicato, se non del tutto impossibile, cercando di rispettare tutti i vincoli hard e soft. Usando il seguente metodo siamo dunque in grado di concentrarci su lavoratori che abbiano probabilità concrete di avere innalzata la propria soddisfazione.
 
 % [FIGURA 4 -- DA INSERIRE]
 % Inserire un grafico a barre orizzontali della classifica per soddisfazione
@@ -653,7 +653,7 @@ Notte (N)      & 96  & 192 \\
 \end{tabular}
 \end{table}
 
-\subsection{Analisi delle Prestazioni Computazionali}
+\subsection{Analisi delle prestazioni computazionali}
 I tempi di interazione con l'LLM si sono mantenuti costanti in entrambi gli scenari (circa 30-40 secondi), poiché dipendono esclusivamente dalla connessione e dai tempi di risposta del cloud. Il calcolo matematico (CP-SAT), invece, scala in base alla difficoltà: nel Caso A ha trovato la soluzione in pochi secondi, mentre nel Caso B la presenza di lavoratori specializzati e vincoli incrociati ha richiesto uno sforzo maggiore, portando il solutore a sfruttare in modo efficiente l'intero budget temporale a sua disposizione (fino ai 120 secondi massimi previsti dalle nostre euristiche per i livelli più complessi). Questa dinamica conferma che il sistema funziona esattamente come progettato: l'intelligenza artificiale gestisce agilmente il lavoro di "traduzione", lasciando il calcolo pesante interamente al motore matematico.
 
 
@@ -663,44 +663,6 @@ I tempi di interazione con l'LLM si sono mantenuti costanti in entrambi gli scen
 \subsection{Discussione complessiva}
 
 Su entrambi i casi il sistema raggiunge i tre obiettivi della traccia: (1)~genera piani \textbf{validi al 100\%} sui vincoli hard, certificati da un verificatore indipendente; (2)~massimizza la soddisfazione tenendo conto delle preferenze formalizzate; (3)~migliora l'equità secondo il criterio leximin, \emph{senza} degradare il benessere collettivo (anzi, aumentandolo). La robustezza dell'approccio neuro-simbolico è confermata dal fatto che le garanzie matematiche non dipendono mai dalla ``buona fede'' dell'LLM, ma da componenti formali deterministici.
-
-
-
-
-
-
-% ===========================================================================
-\section{Scenari futuri e possibili estensioni}
-\label{sec:futuro}
-% ===========================================================================
-I risultati ottenuti aprono diverse direzioni di evoluzione, sia sul piano della sicurezza sia su quello funzionale.
-
-
-\subsection{Sicurezza dell'esecuzione del codice generato}
-
-Il sistema esegue il codice Python generato dall'LLM tramite la funzione \texttt{exec()} (all'interno di \texttt{safe\_execute}): una scelta consapevole, che nel contesto attuale garantisce la massima flessibilità senza introdurre complessità infrastrutturale. In uno scenario di produzione su larga scala, tuttavia, l'esecuzione di codice generato dinamicamente richiede contromisure aggiuntive: un prompt malevolo o un'allucinazione del modello potrebbero produrre script che accedono al filesystem o alla rete.
-
-L'evoluzione architetturale verso un prodotto enterprise richiede necessariamente un approccio articolato su due livelli:
-\begin{itemize}[noitemsep]
-  \item \textbf{Parsing}: a livello applicativo, prima dell'esecuzione, il codice dovrebbe essere sottoposto ad una procedura di parsing per essere certi che contenga esclusivamente chiamate alle librerie matematiche consentite (es. \texttt{cp\_model} di OR-Tools), bloccando preventivamente qualsiasi importazione di moduli di sistema (come \texttt{os}, \texttt{sys} o \texttt{socket}).
-  \item \textbf{Isolamento}: a livello infrastrutturale, l'esecuzione deve avvenire in un ambiente rigidamente confinato e privo di permessi di I/O e rete. Questo può essere realizzato utilizzando runtime WebAssembly (Wasm) o tramite container effimeri (es. Docker).
-\end{itemize}
-
-\subsection{Robustezza del prompting}
-
-Nel design attuale, il prompt del Drafting Agent include template Python: una scelta progettuale rigorosa e mirata che neutralizza efficacemente le allucinazioni del modello, orientandone l'attività verso un'assoluta precisione esecutiva. Questo approccio garantisce l'affidabilità dell'output, incanalando con successo le capacità dell'LLM all'interno di un perimetro sintattico sicuro e controllato.
-
-Il passo successivo consiste nel passare dalla generazione di script completi all'orchestrazione di funzioni pre-validate, sfruttando il Function Calling (o Structured Outputs) dell'LLM. Anziché scrivere intero codice CP-SAT, il modello invocherebbe direttamente funzioni di libreria già testate — ad esempio \texttt{add\_coverage(model, day, shift, 2)} o \texttt{add\_night\_rest(model, worker)} — concentrandosi esclusivamente su \emph{quali} vincoli attivare e con \emph{quali} parametri. In questo modo la logica matematica (verificata una volta) resterebbe separata dall'orchestrazione semantica (affidata all'LLM), riducendo ulteriormente la superficie d'errore.
-
-
-\subsection{Altre direzioni di sviluppo}
-\begin{itemize}[itemsep=1ex]
-  \item \textbf{Ripianificazione Dinamica (Rescheduling)}: gestire eventi imprevisti (malattie improvvise, emergenze) tramite ri-ottimizzazione. In questo scenario, l'obiettivo si estende: oltre a mantenere fattibilità ed equità, il solutore deve penalizzare la deviazione dal piano originale (minimizzazione delle perturbazioni) per garantire stabilità organizzativa ai lavoratori.
-  \item \textbf{Scalabilità}: per ospedali con centinaia di dipendenti, il modello CP-SAT attuale (e in particolare il loop leximin forzato) potrebbe incontrare limiti computazionali. Per garantire prestazioni ottimali anche su larga scala, le integrazioni future potrebbero suddividere la pianificazione elaborando i turni per singolo reparto, oppure riducendo l'orizzonte temporale a finestre settimanali anziché mensili, così da abbattere drasticamente la complessità.
-  \item \textbf{Explainable AI e Negoziazione Conversazionale}: espandere la Fase 1 per permettere al Workers Agent di instaurare un dialogo con l'utente. Se una preferenza non può essere soddisfatta a causa di un vincolo strutturale, l'agente (interrogando l'esito della Fase 3) dovrebbe spiegare in linguaggio naturale il motivo del rifiuto (``Non posso darti libero il 25 perché violerebbe la copertura minima del turno''), avviando una negoziazione per trovare soluzioni alternative.
-\end{itemize}
-
-
 
 
 % ===========================================================================
