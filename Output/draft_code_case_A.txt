@@ -3,7 +3,7 @@ def build_model():
     x = {(w, d, s): model.NewBoolVar(f"x_{w}_{d}_{s}")
           for w in WORKER_IDS for d in range(NUM_DAYS) for s in SHIFT_CODES}
 
-    # Vincolo 1: Max 1 turno al giorno per lavoratore
+    # Vincolo 1: Max 1 turno al giorno
     for w in WORKER_IDS:
         for d in range(NUM_DAYS):
             model.AddAtMostOne(x[(w, d, s)] for s in SHIFT_CODES)
@@ -11,9 +11,19 @@ def build_model():
     # Vincolo 2: ESATTAMENTE 25 turni/mese per lavoratore (pesati)
     for w in WORKER_IDS:
         model.Add(cp_model.LinearExpr.sum([SHIFT_WEIGHT[s] * x[(w, d, s)]
-                                           for d in range(NUM_DAYS) for s in SHIFT_CODES]) == 25)
+                                            for d in range(NUM_DAYS) for s in SHIFT_CODES]) == 25)
 
-    # Vincolo 3: Divieto assoluto Notte(d)->Mattina(d+1)
+    # Vincolo 3: Max 36 ore settimanali per lavoratore (per ogni finestra di 7 giorni consecutivi)
+    # Vincolo 6: Almeno 1 giorno di riposo a settimana (per ogni finestra di 7 giorni: <=6 lavorati)
+    for w in WORKER_IDS:
+        for t in range(NUM_DAYS - 6):
+            finestra = range(t, t + 7)
+            model.Add(cp_model.LinearExpr.sum([SHIFT_HOURS[s] * x[(w, d, s)]
+                                                for d in finestra for s in SHIFT_CODES]) <= 36)
+            model.Add(cp_model.LinearExpr.sum([x[(w, d, s)]
+                                                for d in finestra for s in SHIFT_CODES]) <= 6)
+
+    # Vincolo 3b: Divieto ASSOLUTO solo della catena Notte(d)->Mattina(d+1)
     for w in WORKER_IDS:
         for d in range(NUM_DAYS - 1):
             model.Add(x[(w, d, 'N')] + x[(w, d + 1, 'M')] <= 1)
@@ -26,21 +36,7 @@ def build_model():
                     for s in SHIFT_CODES:
                         model.Add(x[(w, d, 'N')] + x[(w, d + k, s)] <= 1)
 
-    # Vincolo 6: Almeno 1 giorno di riposo a settimana (per ogni finestra di 7 giorni)
-    for w in WORKER_IDS:
-        for t in range(NUM_DAYS - 6):
-            finestra = range(t, t + 7)
-            model.Add(cp_model.LinearExpr.sum([x[(w, d, s)]
-                                                for d in finestra for s in SHIFT_CODES]) <= 6)
-
-    # Vincolo 1 (reiterato per chiarezza): Max 36 ore settimanali per lavoratore
-    for w in WORKER_IDS:
-        for t in range(NUM_DAYS - 6):
-            finestra = range(t, t + 7)
-            model.Add(cp_model.LinearExpr.sum([SHIFT_HOURS[s] * x[(w, d, s)]
-                                                for d in finestra for s in SHIFT_CODES]) <= 36)
-
-    # Vincolo: Turni vietati
+    # Vincolo: TURNI VIETATI
     for w in WORKER_IDS:
         for s in FORBIDDEN_SHIFTS[w]:
             for d in range(NUM_DAYS):
@@ -65,7 +61,7 @@ solver_a = cp_model.CpSolver()
 solver_a.parameters.max_time_in_seconds = max(20.0, MAX_TIME * 0.4)
 solver_a.parameters.num_search_workers = 8
 solver_a.parameters.log_search_progress = False
-status_a = solver_a.Solve(model_a)
+status_a = solver_a.Solve(model_a)  # tipicamente OPTIMAL/FEASIBLE in ~10s
 warm = None
 if status_a in (cp_model.OPTIMAL, cp_model.FEASIBLE):
     warm = {key: int(solver_a.Value(var)) for key, var in x_a.items()}
@@ -75,7 +71,6 @@ model, x = build_model()
 if warm is not None:
     for key, var in x.items():
         model.AddHint(var, warm[key])
-
 obiettivo = []
 # (a) Soddisfazione + penalita' per i GIORNI INDESIDERATI (ferie).
 for w in WORKER_IDS:
