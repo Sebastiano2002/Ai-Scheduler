@@ -25,8 +25,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-import input_data
-from Fase2_drafting_agent import (
+from . import input_data
+from .Fase2_drafting_agent import (
     ProblemData,
     ScheduleResult,
     SATISFACTION_SCALE,
@@ -39,7 +39,7 @@ from Fase2_drafting_agent import (
     save_generated_code,
     worker_satisfaction_pct,
 )
-from Fase3_verification_agent import (
+from .Fase3_verification_agent import (
     VerificationReport,
     load_schedule_from_csv,
     print_report,
@@ -344,7 +344,7 @@ def run_refinement_loop(
         raise ValueError(
             "Manca il codice cp_model della bozza iniziale: la Fase 4 lo richiede "
             "come input testuale. Rigenera la Fase 2 o passa --from-draft con il "
-            f".txt del codice (draft_code_case_{data.case_label}.txt)."
+            f".txt del codice (Output/draft_code_case_{data.case_label}.txt)."
         )
 
     worker_ids = list(data.worker_ids)
@@ -615,8 +615,8 @@ def _load_draft_from_disk(data: ProblemData) -> ScheduleResult:
     codice cp_model dal .txt salvato. Evita di richiamare l'LLM per la sola bozza
     iniziale quando e' gia' disponibile su disco.
     """
-    csv_path = f"schedule_case_{data.case_label}.csv"
-    code_path = f"draft_code_case_{data.case_label}.txt"
+    csv_path = f"Output/schedule_case_{data.case_label}.csv"
+    code_path = f"Output/draft_code_case_{data.case_label}.txt"
     result = load_schedule_from_csv(data, csv_path)
     if os.path.exists(code_path):
         with open(code_path, encoding="utf-8") as f:
@@ -637,7 +637,7 @@ def run_case(
     data = load_problem_data(case_label)
 
     
-    from llm_engine import AgentExecutor
+    from .llm_engine import AgentExecutor
     executor = AgentExecutor()
 
     # Bozza iniziale (Fase 2) 
@@ -646,7 +646,7 @@ def run_case(
         initial_result = _load_draft_from_disk(data)
         if not initial_result.generated_code:
             raise SystemExit(
-                f"[!] Manca 'draft_code_case_{case_label}.txt' (codice cp_model "
+                f"[!] Manca 'Output/draft_code_case_{case_label}.txt' (codice cp_model "
                 f"della bozza). Rigenera la Fase 2 senza --from-draft."
             )
     else:
@@ -674,12 +674,12 @@ def run_case(
     )
 
     # Salvataggio dell'orario di riferimento finale 
-    final_csv = f"schedule_case_{case_label}_final.csv"
+    final_csv = f"Output/schedule_case_{case_label}_final.csv"
     export_csv(data, outcome.best_result, path=final_csv)
     if outcome.best_result.generated_code:
         save_generated_code(
             case_label, outcome.best_result.generated_code,
-            path=f"final_code_case_{case_label}.txt",
+            path=f"Output/final_code_case_{case_label}.txt",
         )
 
     print_refinement_summary(data, outcome)

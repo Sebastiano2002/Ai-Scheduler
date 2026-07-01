@@ -34,18 +34,22 @@ Esecuzione (richiede la variabile d'ambiente GEMINI_API_KEY):
 
 import argparse
 import importlib
+import sys
+import os
 
-import Fase1_workers_agent
-from llm_engine import AgentExecutor
-from Fase2_drafting_agent import (
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Output'))
+
+from Agents import Fase1_workers_agent
+from Agents.llm_engine import AgentExecutor
+from Agents.Fase2_drafting_agent import (
     export_csv,
     load_problem_data,
     print_summary,
     run_llm_drafting,
     save_generated_code,
 )
-from Fase3_verification_agent import print_report, verify_schedule
-from Fase4_refinement_agent import print_refinement_summary, run_refinement_loop
+from Agents.Fase3_verification_agent import print_report, verify_schedule
+from Agents.Fase4_refinement_agent import print_refinement_summary, run_refinement_loop
 
 
 # ---------------------------------------------------------------------------
@@ -141,12 +145,12 @@ def run_phase_4(executor, data, result, report, max_iterations, max_time):
         max_iterations=max_iterations, max_time=max_time,
     )
 
-    final_csv = f"schedule_case_{data.case_label}_final.csv"
+    final_csv = f"Output/schedule_case_{data.case_label}_final.csv"
     export_csv(data, outcome.best_result, path=final_csv)
     if outcome.best_result.generated_code:
         save_generated_code(
             data.case_label, outcome.best_result.generated_code,
-            path=f"final_code_case_{data.case_label}.txt",
+            path=f"Output/final_code_case_{data.case_label}.txt",
         )
 
     print_refinement_summary(data, outcome)
@@ -179,10 +183,10 @@ def run_pipeline(case_label, max_time, max_iterations, max_draft_attempts):
     print(f"\n{'='*64}")
     print(f"PIPELINE COMPLETATA | Caso {case_label}")
     print(f"{'='*64}")
-    print(f"  Preferenze formalizzate : formalized_preferences_case_{case_label}.py")
-    print(f"  Codice bozza (LLM)      : draft_code_case_{case_label}.txt")
-    print(f"  Bozza schedulazione     : schedule_case_{case_label}.csv")
-    print(f"  Codice finale (LLM)     : final_code_case_{case_label}.txt")
+    print(f"  Preferenze formalizzate : Output/formalized_preferences_case_{case_label}.py")
+    print(f"  Codice bozza (LLM)      : Output/draft_code_case_{case_label}.txt")
+    print(f"  Bozza schedulazione     : Output/schedule_case_{case_label}.csv")
+    print(f"  Codice finale (LLM)     : Output/final_code_case_{case_label}.txt")
     print(f"  Orario finale           : {final_csv}")
     print(f"  Minimo equita'          : {outcome.initial_worst} -> {outcome.final_worst}")
     return outcome

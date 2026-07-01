@@ -22,12 +22,12 @@ import datetime
 
 from pydantic import ValidationError
 
-from llm_engine import AgentExecutor
-from models import AllWorkerPreferences
-import input_data
+from .llm_engine import AgentExecutor
+from .models import AllWorkerPreferences
+from . import input_data
 
 
-PREFERENCES_FILE = "worker_preferences.txt"
+PREFERENCES_FILE = "Agents/worker_preferences.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ def split_hard_soft(worker_preferences):
 
 def save_formalized(case_label, worker_preferences):
     """Salva le preferenze formalizzate in 'formalized_preferences_case_X.py'"""
-    out_path = f"formalized_preferences_case_{case_label}.py"
+    out_path = f"Output/formalized_preferences_case_{case_label}.py"
     timestamp = datetime.datetime.now().isoformat(timespec="seconds")
 
     hard, soft = split_hard_soft(worker_preferences)

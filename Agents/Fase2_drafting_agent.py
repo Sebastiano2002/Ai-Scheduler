@@ -20,12 +20,17 @@ import argparse
 import csv
 import datetime
 import importlib
+import sys
+import os
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '../Output'))
+
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from ortools.sat.python import cp_model
 
-import input_data
+from . import input_data
 
 
 # ===========================================================================
@@ -621,7 +626,7 @@ def save_generated_code(case_label: str, code: str, path: Optional[str] = None) 
     Salva su .txt il codice cp_model prodotto dall'LLM. E' anche l'input testuale della Fase 4.
     """
     if path is None:
-        path = f"draft_code_case_{case_label}.txt"
+        path = f"Output/draft_code_case_{case_label}.txt"
     with open(path, "w", encoding="utf-8") as f:
         f.write(code)
     print(f"[+] Codice cp_model della bozza salvato in: {path}")
@@ -682,7 +687,7 @@ def run_llm_drafting(
 def export_csv(data: ProblemData, result: ScheduleResult, path: Optional[str] = None) -> str:
     """Salva la schedulazione in CSV (righe = lavoratori, colonne = date)."""
     if path is None:
-        path = f"schedule_case_{data.case_label}.csv"
+        path = f"Output/schedule_case_{data.case_label}.csv"
 
     # Colonne finali: soddisfazione ASSOLUTA (modello di base) + il MASSIMO
     # individuale e la soddisfazione NORMALIZZATA in % (metrica di equita').
@@ -782,7 +787,7 @@ def run_case(case_label: str, max_time: float = 60.0) -> Optional[ScheduleResult
     print(f"{'#'*64}")
 
     # Inferenza via Google Gemini 2.5 Flash.
-    from llm_engine import AgentExecutor
+    from .llm_engine import AgentExecutor
     executor = AgentExecutor()
     result = run_llm_drafting(executor, data, max_time=max_time)
     if result is None:

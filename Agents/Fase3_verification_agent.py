@@ -16,8 +16,8 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-import input_data
-from Fase2_drafting_agent import (
+from . import input_data
+from .Fase2_drafting_agent import (
     ProblemData,
     ScheduleResult,
     compute_sat_max,
@@ -458,13 +458,13 @@ def run_case(case_label: str, from_csv: Optional[str], max_time: float = 30.0
     print(f"{'#'*64}")
 
     if from_csv is not None:
-        path = from_csv if from_csv else f"schedule_case_{case_label}.csv"
+        path = from_csv if from_csv else f"Output/schedule_case_{case_label}.csv"
         print(f"[*] Carico la schedulazione da CSV: {path}")
         result = load_schedule_from_csv(data, path)
     else:
         print("[*] Genero la bozza con l'LLM (Fase 2) da verificare...")
         # Inferenza via Google Gemini 2.5 Flash: richiede GEMINI_API_KEY.
-        from llm_engine import AgentExecutor
+        from .llm_engine import AgentExecutor
         executor = AgentExecutor()
         result = run_llm_drafting(executor, data, max_time=max_time)
         if result is None:
@@ -490,7 +490,7 @@ def main():
     parser.add_argument(
         "--from-csv", nargs="?", const="", default=None,
         help="Verifica una schedulazione salvata su CSV invece di rigenerarla. "
-             "Opzionalmente passa il path (default: schedule_case_<CASE>.csv).",
+             "Opzionalmente passa il path (default: Output/schedule_case_<CASE>.csv).",
     )
     parser.add_argument(
         "--max-time", type=float, default=120.0,

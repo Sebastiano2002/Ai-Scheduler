@@ -154,11 +154,11 @@ class SmartSchedulerGUI(ctk.CTk):
         files = []
         for l in labels:
             files.extend([
-                f"formalized_preferences_case_{l}.py",
-                f"draft_code_case_{l}.txt",
-                f"schedule_case_{l}.csv",
-                f"final_code_case_{l}.txt",
-                f"schedule_case_{l}_final.csv",
+                f"Output/formalized_preferences_case_{l}.py",
+                f"Output/draft_code_case_{l}.txt",
+                f"Output/schedule_case_{l}.csv",
+                f"Output/final_code_case_{l}.txt",
+                f"Output/schedule_case_{l}_final.csv",
             ])
         return files
 
@@ -175,13 +175,13 @@ class SmartSchedulerGUI(ctk.CTk):
 
         case_label = self.case_var.get()
         if case_label == "all":
-            f1_done = os.path.exists("formalized_preferences_case_A.py") and os.path.exists("formalized_preferences_case_B.py")
-            f2_done = os.path.exists("draft_code_case_A.txt") and os.path.exists("schedule_case_A.csv") and os.path.exists("draft_code_case_B.txt") and os.path.exists("schedule_case_B.csv")
-            f4_done = os.path.exists("schedule_case_A_final.csv") and os.path.exists("schedule_case_B_final.csv")
+            f1_done = os.path.exists("Output/formalized_preferences_case_A.py") and os.path.exists("Output/formalized_preferences_case_B.py")
+            f2_done = os.path.exists("Output/draft_code_case_A.txt") and os.path.exists("Output/schedule_case_A.csv") and os.path.exists("Output/draft_code_case_B.txt") and os.path.exists("Output/schedule_case_B.csv")
+            f4_done = os.path.exists("Output/schedule_case_A_final.csv") and os.path.exists("Output/schedule_case_B_final.csv")
         else:
-            f1_done = os.path.exists(f"formalized_preferences_case_{case_label}.py")
-            f2_done = os.path.exists(f"draft_code_case_{case_label}.txt") and os.path.exists(f"schedule_case_{case_label}.csv")
-            f4_done = os.path.exists(f"schedule_case_{case_label}_final.csv")
+            f1_done = os.path.exists(f"Output/formalized_preferences_case_{case_label}.py")
+            f2_done = os.path.exists(f"Output/draft_code_case_{case_label}.txt") and os.path.exists(f"Output/schedule_case_{case_label}.csv")
+            f4_done = os.path.exists(f"Output/schedule_case_{case_label}_final.csv")
         
         self.btn_phase_1.configure(state="normal" if not f1_done else "disabled")
         self.btn_phase_2.configure(state="normal" if (f1_done and not f2_done) else "disabled")
@@ -350,25 +350,25 @@ class SmartSchedulerGUI(ctk.CTk):
 
     def run_phase_1(self):
         case_label = self.case_var.get()
-        cmd = [sys.executable, "Fase1_workers_agent.py", "--case", case_label]
+        cmd = [sys.executable, "-m", "Agents.Fase1_workers_agent", "--case", case_label]
         msg = "Esecuzione Fase 1 (Entrambi i Casi)..." if case_label == "all" else f"Esecuzione Fase 1 (Caso {case_label})...."
         self.start_execution(cmd, msg, phase=1)
 
     def run_phase_2(self):
         case_label = self.case_var.get()
-        cmd = [sys.executable, "Fase2_drafting_agent.py", "--case", case_label]
+        cmd = [sys.executable, "-m", "Agents.Fase2_drafting_agent", "--case", case_label]
         msg = "Esecuzione Fase 2 (Entrambi i Casi)..." if case_label == "all" else f"Esecuzione Fase 2 (Caso {case_label})...."
         self.start_execution(cmd, msg, phase=2)
 
     def run_phase_3(self):
         case_label = self.case_var.get()
-        cmd = [sys.executable, "Fase3_verification_agent.py", "--case", case_label, "--from-csv"]
+        cmd = [sys.executable, "-m", "Agents.Fase3_verification_agent", "--case", case_label, "--from-csv"]
         msg = "Esecuzione Fase 3 (Entrambi i Casi)..." if case_label == "all" else f"Esecuzione Fase 3 (Caso {case_label})...."
         self.start_execution(cmd, msg, phase=3)
 
     def run_phase_4(self):
         case_label = self.case_var.get()
-        cmd = [sys.executable, "Fase4_refinement_agent.py", "--case", case_label, "--from-draft"]
+        cmd = [sys.executable, "-m", "Agents.Fase4_refinement_agent", "--case", case_label, "--from-draft"]
         msg = "Esecuzione Fase 4 (Entrambi i Casi)..." if case_label == "all" else f"Esecuzione Fase 4 (Caso {case_label})...."
         self.start_execution(cmd, msg, phase=4)
 
